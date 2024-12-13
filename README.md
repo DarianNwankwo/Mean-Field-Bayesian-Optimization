@@ -1,1 +1,1 @@
-# Differentiating Policies for Non-Myopic Bayesian Optimization
+# Bayesian Optimization with a Mean Field
