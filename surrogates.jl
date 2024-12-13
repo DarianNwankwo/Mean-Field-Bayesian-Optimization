@@ -406,10 +406,22 @@ end
 # ------------------------------------------------------------------
 function log_likelihood(s::Surrogate)
     n = get_observed(s)
-    y = get_active_observations(s)
-    c = get_active_coefficients(s)
-    L = get_active_cholesky(s)
-    return -y'*c/2 - sum(log.(diag(L))) - n*log(2π)/2
+    m = length(get_parametric_basis_function(s))
+    yz = [get_active_observations(s); zeros(m)]
+    d = get_active_coefficients(s)
+    λ = get_parametric_component_coefficients(s)
+    dλ = [d; λ]
+    ϵ = s.ϵ
+    Σ = s.Σref
+    P = get_active_parametric_basis_matrix(s)
+    K = get_active_covariance(s)
+
+    # Do the log determinant stuff here
+    A = [-ϵ*inv(Σ) P';
+         P         K]
+    B = -ϵ*inv(Σ)
+
+    return -dot(yz, dλ)/2 - n*log(2π)/2 - (det(A) / det(B))
 end
 
 function δlog_likelihood(s::Surrogate, δθ::Vector{T}) where T <: Real
