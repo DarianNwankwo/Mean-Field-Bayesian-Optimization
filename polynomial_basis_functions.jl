@@ -17,7 +17,7 @@ get_basis_hessians(pbf::PolynomialBasisFunction) = pbf.basis_hessians
 
 Base.length(pbf::PolynomialBasisFunction) = length(get_basis_functions(pbf))
 
-function eval_basis(pbf::PolynomialBasisFunction, x::Vector{T}) where T <: Real
+function eval_basis(pbf::PolynomialBasisFunction, x::AbstractVector{T}) where T <: Real
     basis_functions = get_basis_functions(pbf)
     basis_evaluation = zeros(length(basis_functions))
     
@@ -28,7 +28,7 @@ function eval_basis(pbf::PolynomialBasisFunction, x::Vector{T}) where T <: Real
     return basis_evaluation
 end
 
-function eval_basis(pbf::PolynomialBasisFunction, X::Matrix{T}) where T <: Real
+function eval_basis(pbf::PolynomialBasisFunction, X::AbstractMatrix{T}) where T <: Real
     d, N = size(X)
     basis_functions = get_basis_functions(pbf)
     basis_evaluations = zeros(N, length(basis_functions))
@@ -40,18 +40,28 @@ function eval_basis(pbf::PolynomialBasisFunction, X::Matrix{T}) where T <: Real
     return basis_evaluations
 end
 
-(pbf::PolynomialBasisFunction)(x::Vector{T}) where T <: Real = eval_basis(pbf, x)
-(pbf::PolynomialBasisFunction)(X::Matrix{T}) where T <: Real = eval_basis(pbf, X)
+(pbf::PolynomialBasisFunction)(x::AbstractVector{T}) where T <: Real = eval_basis(pbf, x)
+(pbf::PolynomialBasisFunction)(X::AbstractMatrix{T}) where T <: Real = eval_basis(pbf, X)
 
-function eval_polynomial(pbf::PolynomialBasisFunction, x::Vector{T1}, c::Vector{T2}) where {T1 <: Real, T2 <: Real}
+function eval_polynomial(
+    pbf::PolynomialBasisFunction,
+    x::AbstractVector{T1},
+    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real}
     basis_evaluation = eval_basis(pbf, x)
     return dot(basis_evaluation, c)
 end
 
-function eval_polynomial(pbf::PolynomialBasisFunction, X::Matrix{T1}, c::Vector{T2}) where {T1 <: Real, T2 <: Real}
+function eval_polynomial(
+    pbf::PolynomialBasisFunction,
+    X::AbstractMatrix{T1},
+    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real}
     basis_evaluations = eval_basis(pbf, X)
     return X*c
 end
 
-(pbf::PolynomialBasisFunction)(x::Vector{T1}, c::Vector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, x, c)
-(pbf::PolynomialBasisFunction)(X::Matrix{T1}, c::Vector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, X, c)
+(pbf::PolynomialBasisFunction)(
+    x::AbstractVector{T1},
+    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, x, c)
+(pbf::PolynomialBasisFunction)(
+    X::AbstractMatrix{T1},
+    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, X, c)

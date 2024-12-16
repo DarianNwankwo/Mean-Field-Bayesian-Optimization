@@ -48,6 +48,9 @@ get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_
 get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
 get_active_parametric_basis_matrix(s::AbstractSurrogate) = @view get_parametric_basis_matrix(s)[1:get_observed(s), :]
 get_parametric_basis_function(s::AbstractSurrogate) = s.ϕ
+get_epsilon(s::AbstractSurrogate) = s.ϵ
+get_sigma_ref(s::AbstractSurrogate) = s.Σref
+get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 
 
 # Define the custom show method for Surrogate
@@ -59,6 +62,24 @@ end
 
 get_decision_rule(s::AbstractSurrogate) = s.g
 set_decision_rule!(s::AbstractSurrogate, g::DecisionRule) = s.g = g
+
+function coefficient_solve(
+    KXX::AbstractMatrix{T1},
+    PX::AbstractMatrix{T2},
+    ϵ::Float64,
+    Σ::AbstractMatrix{T3},
+    observation_noise::Float64,
+    y::AbstractVector{T4}) where {T1 <: Real, T2 <: Real, T3 <: Real, T4 <: Real}
+    p_dim, k_dim = size(Σ, 2), size(KXX, 2)
+    A = [KXX PX;
+         PX' -ϵ*inv(Σ) + observation_noise * I]
+    # A = A + observation_noise * I
+    F = lu(A)
+    b = [y; zeros(p_dim)]
+    w = F \ b
+    d, λ = w[1:k_dim], w[k_dim+1:end]
+    return d, λ
+end
 
 """
 Preallocate a covariate matrix of size (d x capacity) and assigned the first N
@@ -97,7 +118,7 @@ function Surrogate(
     """
     preallocated_K = zeros(capacity, capacity)
     KXX = eval_KXX(ψ, X)
-    preallocated_K[1:N, 1:N] = KXX
+    preallocated_K[1:N, 1:N] = KXX + observation_noise * I
 
     """
     Preallocate a matrix for the cholesky factorization of size d x capacity
@@ -113,17 +134,13 @@ function Surrogate(
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    A = [KXX PX;
-         PX' -ϵ*inv(Σref)]
-    A = A + observation_noise * I
-    F = lu(A)
-    b = [y; zeros(length(ϕ))]
-    w = F \ b
+    d, λ = coefficient_solve(KXX, PX, ϵ, Σref, observation_noise, y)
 
     preallocated_d = zeros(capacity)
-    preallocated_d[1:N] = w[1:N]
+    preallocated_d[1:length(d)] = d
 
-    λ_polynomial = w[N+1:end]
+    λ_polynomial = zeros(length(λ))
+    λ_polynomial[:] = λ
 
     preallocated_y = zeros(capacity)
     preallocated_y[1:N] = y
@@ -176,28 +193,10 @@ function resize(s::Surrogate)
         Σref=s.Σref,
         capacity=get_capacity(s) * DOUBLE,
         decision_rule=get_decision_rule(s),
-        observation_noise=s.σn2
+        observation_noise=get_observation_noise(s)
     )
 end
 
-function reset!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where T <: Real
-    @views begin
-        d, N = size(X)
-
-        s.X[:, 1:N] = X
-        s.K[1:N, 1:N] = eval_KXX(get_kernel(s), s.X[:, 1:N], σn2=s.σn2)
-        s.L[1:N, 1:N] = LowerTriangular(
-            cholesky(
-                Hermitian(
-                    s.K[1:N, 1:N]
-                )
-            ).L
-        )
-        s.c[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ y)
-        s.y[1:N] = y
-        s.observed = length(y)
-    end
-end
 
 function insert!(s::Surrogate, x::Vector{T}, y::T) where T <: Real
     insert_index = get_observed(s) + 1
@@ -212,7 +211,7 @@ function update_covariance!(s::Surrogate, x::Vector{T}, y::T) where T <: Real
         kernel = get_kernel(s)
 
         # Update the main diagonal
-        s.K[update_index, update_index] = kernel(0.) + s.σn2
+        s.K[update_index, update_index] = kernel(0.) + get_observation_noise(s)
         # Update the rows and columns with covariance vector formed from k(x, X)
         s.K[update_index, 1:update_index - 1] = eval_KxX(kernel, x, active_X)'
         s.K[1:update_index - 1, update_index] = s.K[update_index, 1:update_index - 1] 
@@ -241,24 +240,36 @@ end
 
 function update_coefficients!(s::Surrogate)
     update_index = get_observed(s)
+    KXX = get_active_covariance(s)
+    PX = get_active_parametric_basis_matrix(s)
+    ϵ = get_epsilon(s)
+    Σ = get_sigma_ref(s)
+    observation_noise = get_observation_noise(s)
+    y = get_active_observations(s)
+    d, λ = coefficient_solve(KXX, PX, ϵ, Σ, observation_noise, y)
     @views begin
-        L = s.L[1:update_index, 1:update_index]
-        s.c[1:update_index] = L' \ (L \ s.y[1:update_index])
+        s.d[1:length(d)] = d
+        s.λ[:] = λ
     end
 end
 
-function update_parametric_basis!(s::Surrogate)
+function update_parametric_design_matrix!(s::Surrogate)
+    @views begin
+        update_index = get_observed(s)
+        new_x = get_covariates(s)[:, update_index]
+        s.P[update_index, :] = eval_basis(get_parametric_basis_function(s), new_x)
+    end
 end
 
 # Update in place
 function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where T <: Real
     if is_full(s) s = resize(s) end
-    insert!(s, xnew, ynew)
+    insert!(s, xnew, ynew) # Updates covariate matrix X and observation vector y
     increment!(s)
-    update_covariance!(s, xnew, ynew)
-    update_cholesky!(s)
-    update_coefficients!(s)
-    update_parametric_basis!(s)
+    update_covariance!(s, xnew, ynew) # Updates covariance matrix K
+    update_cholesky!(s) # Updates cholesky factorization matrix L
+    update_parametric_design_matrix!(s) # Updates parametric design matrix P
+    update_coefficients!(s) # Updates coefficients d, λ
     return s
 end
 
@@ -280,8 +291,8 @@ function eval(
         d = get_active_coefficients(s)
         λ = get_parametric_component_coefficients(s)
         y = get_active_observations(s)
-        ϵ = s.ϵ
-        Σ = s.Σref
+        ϵ = get_epsilon(s)
+        Σ = get_sigma_ref(s)
         kernel = get_kernel(s)
         parametric_basis = get_parametric_basis_function(s)
 
@@ -411,8 +422,8 @@ function log_likelihood(s::Surrogate)
     d = get_active_coefficients(s)
     λ = get_parametric_component_coefficients(s)
     dλ = [d; λ]
-    ϵ = s.ϵ
-    Σ = s.Σref
+    ϵ = get_epsilon(s)
+    Σ = get_sigma_ref(s)
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
 
