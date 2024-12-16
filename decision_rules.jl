@@ -129,9 +129,9 @@ function POI(; σtol=1e-8)
 end
 
 function LCB()
-    @doc raw"""Lower confidence bound is \mu(x) - κ \sigma(x), a quantity we want to minimize in our minimization
+    @doc raw"""Lower confidence bound is μ(x) - κ*σ(x), a quantity we want to minimize in our minimization
     framework for Bayesian optimization. However, we expect our acquisition functions to be things we want
-    to maximize. Hence, minimizing LCB(x) is equivalent to maximizing -LCB(x)
+    to maximize. Hence, minimizing LCB(x) is equivalent to maximizing -LCB(x) = κ*σ(x) - μ(x)
     """
     function lcb(μ, σ, θ, sx)
         return θ[1] * σ - μ
