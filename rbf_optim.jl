@@ -1,5 +1,5 @@
 function base_solve(
-    surrogate::Surrogate;
+    surrogate::HybridSurrogate;
     spatial_lbs::Vector{T},
     spatial_ubs::Vector{T},
     xstart::Vector{T},
@@ -33,7 +33,7 @@ end
 
 
 function multistart_base_solve!(
-    surrogate::Surrogate,
+    surrogate::HybridSurrogate,
     xfinal::Vector{T};
     spatial_lbs::Vector{T},
     spatial_ubs::Vector{T},
