@@ -1,4 +1,4 @@
-@doc raw"""Decision Rules
+@doc raw"""Decision Rule
 
 Decision rules correspond to some user-defined function in terms of the predictive mean, predictive standard deviation,
 some hyperparameters θ, and functional access to an object sx. Here, sx is the evaluation of our surrogate at some
@@ -34,6 +34,14 @@ end
 
 get_name(dr::DecisionRule) = dr.name
 
+@doc raw"""
+To construct a decision rule, one merely defines a function, as defined above, and pass it to the DecisionRule
+constructor and provide it with a name, i.e.:
+```
+g(μ, σ, θ, sx) = μ - θ[1]*σ
+my_decision = DecisionRule(g, "Lower Confidence Bound")
+```
+"""
 function DecisionRule(g::Function, name::String)
     dg_dμ(μ, σ, θ, sx) = ForwardDiff.derivative(μ -> g(μ, σ, θ, sx), μ)
     d2g_dμ(μ, σ, θ, sx) = ForwardDiff.derivative(μ -> dg_dμ(μ, σ, θ, sx), μ)
@@ -47,10 +55,10 @@ function DecisionRule(g::Function, name::String)
     return DecisionRule(g, dg_dμ, d2g_dμ, dg_dσ, d2g_dσ, dg_dθ, d2g_dθ, d2g_dμdθ, d2g_dσdθ, name)
 end
 
-(bp::DecisionRule)(μ::Number, σ::Number, θ::AbstractVector, sx) = bp.g(μ, σ, θ, sx)
+(dr::DecisionRule)(μ::Number, σ::Number, θ::AbstractVector, sx) = dr.g(μ, σ, θ, sx)
 
 
-function first_partial(p::AbstractDecisionRule; symbol::Symbol)
+function first_partial(p::DecisionRule; symbol::Symbol)
     if symbol == :μ
         return p.dg_dμ
     elseif symbol == :σ
@@ -61,13 +69,13 @@ function first_partial(p::AbstractDecisionRule; symbol::Symbol)
         error("Unknown symbol. Use :μ, :σ, or :θ")
     end
 end
-first_partials(p::AbstractDecisionRule) = (
+first_partials(p::DecisionRule) = (
     μ=first_partial(p, symbol=:μ),
     σ=first_partial(p, symbol=:σ),
     θ=first_partial(p, symbol=:θ)
 )
 
-function second_partial(p::AbstractDecisionRule; symbol::Symbol)
+function second_partial(p::DecisionRule; symbol::Symbol)
     if symbol == :μ
         return p.d2g_dμ
     elseif symbol == :σ
@@ -78,13 +86,13 @@ function second_partial(p::AbstractDecisionRule; symbol::Symbol)
         error("Unknown symbol. Use :μ, :σ, or :θ")
     end
 end
-second_partials(p::AbstractDecisionRule) = (
+second_partials(p::DecisionRule) = (
     μ=second_partial(p, symbol=:μ),
     σ=second_partial(p, symbol=:σ),
     θ=second_partial(p, symbol=:θ)
 )
 
-function mixed_partial(p::AbstractDecisionRule; symbol::Symbol)
+function mixed_partial(p::DecisionRule; symbol::Symbol)
     if symbol == :μθ
         p.d2g_dμdθ 
     elseif symbol == :σθ
@@ -95,8 +103,58 @@ function mixed_partial(p::AbstractDecisionRule; symbol::Symbol)
 end
 
 # Some Common Acquisition Functions
+@doc raw"""
+    EI(; σtol=1e-8)
+
+Expected Improvement (EI) is an acquisition function used in Bayesian optimization. It quantifies the 
+expected amount of improvement over the current best observed value, taking into account both the 
+predicted mean and uncertainty of the surrogate model.
+
+# Definition
+The EI is computed as:
+
+    EI(x) = E[max(f_min - f(x) - ξ, 0)],
+
+where:
+- `f(x)` is the objective value predicted by the surrogate model at \( x \),
+- `f_min` is the current minimum observed value,
+- `ξ` (theta[1]) is a small positive margin (exploration parameter),
+- `E` is the expectation operator.
+
+To calculate EI, the improvement is defined as:
+
+    improvement = f_min - μ(x) - ξ,
+
+where:
+- `μ(x)` is the posterior mean, and
+- `σ(x)` is the posterior standard deviation.
+
+The standard normal score \( z \) is then:
+
+    z = improvement / σ(x).
+
+The EI is given by:
+
+    EI(x) = improvement * Φ(z) + σ(x) * φ(z),
+
+where:
+- \( Φ(z) \) is the CDF of the standard normal distribution,
+- \( φ(z) \) is the PDF of the standard normal distribution.
+
+# Arguments
+- `σtol=1e-8`: A small threshold for the standard deviation. If \( σ(x) < σtol \), the EI is set to 0.0 
+  to avoid numerical instability.
+
+# Returns
+A `DecisionRule` object representing the Expected Improvement acquisition function.
+
+# Notes
+- EI balances exploration and exploitation by favoring regions with high predicted improvement or high 
+  uncertainty.
+- If the standard deviation \( σ(x) \) is very small, the EI is effectively zero, as no significant 
+  improvement is expected.
+"""
 function EI(; σtol=1e-8)
-    # TODO: Create a lazy evaluation version of this function. I want to return ei(μ, σ, θ, minimum(y))
     function ei(μ, σ, θ, sx)
         if σ < σtol
             return 0.
@@ -112,6 +170,52 @@ function EI(; σtol=1e-8)
     return DecisionRule(ei, "EI")
 end
 
+@doc raw"""
+    POI(; σtol=1e-8)
+
+Probability of Improvement (POI) is an acquisition function used in Bayesian optimization. It measures 
+the probability that the current model will produce an improvement over the best observed value.
+
+# Definition
+The POI is computed as:
+
+    POI(x) = P(f(x) < f_min - ξ),
+
+where:
+- `f(x)` is the objective value predicted by the surrogate model at \( x \),
+- `f_min` is the current minimum observed value,
+- `ξ` (theta[1]) is a small positive margin (exploration parameter),
+- `P` is the cumulative distribution function (CDF) of a standard normal distribution.
+
+To compute the POI, the improvement is defined as:
+
+    improvement = f_min - μ(x) - ξ,
+
+where:
+- `μ(x)` is the posterior mean, and
+- `σ(x)` is the posterior standard deviation.
+
+The standard normal score \( z \) is then:
+
+    z = improvement / σ(x).
+
+The POI is finally given by:
+
+    POI(x) = Φ(z),
+
+where \( Φ \) is the CDF of the standard normal distribution.
+
+# Arguments
+- `σtol=1e-8`: A small threshold for the standard deviation. If \( σ(x) < σtol \), the POI is set to 0.0 
+  to avoid numerical instability.
+
+# Returns
+A `DecisionRule` object representing the Probability of Improvement acquisition function.
+
+# Notes
+- If the standard deviation \( σ(x) \) is too small (indicating high confidence), no exploration is 
+  encouraged, and the POI is zero.
+"""
 function POI(; σtol=1e-8)
     function poi(μ, σ, θ, sx)
         if σ < σtol
@@ -128,11 +232,31 @@ function POI(; σtol=1e-8)
     return DecisionRule(poi, "POI")
 end
 
+@doc raw"""
+    LCB()
+
+Lower Confidence Bound (LCB) is a commonly used acquisition function in Bayesian optimization. 
+In its original form, it is defined as:
+
+    LCB(x) = μ(x) - κ * σ(x),
+
+where:
+- `μ(x)` is the posterior mean,
+- `σ(x)` is the posterior standard deviation,
+- `κ` is a positive scaling parameter that controls the exploration-exploitation trade-off.
+
+In a minimization framework, we aim to minimize LCB(x). However, since acquisition functions 
+in this framework are expected to be maximized, we instead maximize:
+
+    -LCB(x) = κ * σ(x) - μ(x).
+
+This transformation allows the minimization task to fit seamlessly into the framework's maximization 
+structure.
+
+# Returns
+A `DecisionRule` object representing the transformed LCB acquisition function.
+"""
 function LCB()
-    @doc raw"""Lower confidence bound is μ(x) - κ*σ(x), a quantity we want to minimize in our minimization
-    framework for Bayesian optimization. However, we expect our acquisition functions to be things we want
-    to maximize. Hence, minimizing LCB(x) is equivalent to maximizing -LCB(x) = κ*σ(x) - μ(x)
-    """
     function lcb(μ, σ, θ, sx)
         return θ[1] * σ - μ
     end
