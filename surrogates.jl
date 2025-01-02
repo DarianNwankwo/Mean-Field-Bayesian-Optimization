@@ -3,11 +3,18 @@ get_covariates(afs::AbstractSurrogate) = afs.X
 get_observations(afs::AbstractSurrogate) = afs.y
 get_decision_rule(afs::AbstractSurrogate) = afs.g
 get_coefficients(afs::AbstractSurrogate) = afs.d
-get_parametric_component_coefficients(afs::AbstractSurrogate) = afs.λ
 get_cholesky(as::AbstractSurrogate) = as.L
 get_covariance(as::AbstractSurrogate) = as.K
-get_parametric_basis_matrix(as::AbstractSurrogate) = as.P
-
+get_capacity(s::AbstractSurrogate) = s.capacity
+increment!(s::AbstractSurrogate) = s.observed += 1
+get_observed(s::AbstractSurrogate) = s.observed
+is_full(s::AbstractSurrogate) = get_observed(s) == get_capacity(s)
+get_active_covariates(s::AbstractSurrogate) = @view get_covariates(s)[:, 1:get_observed(s)]
+get_active_cholesky(s::AbstractSurrogate) = @view get_cholesky(s)[1:get_observed(s), 1:get_observed(s)]
+get_active_covariance(s::AbstractSurrogate) = @view get_covariance(s)[1:get_observed(s), 1:get_observed(s)]
+get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_observed(s)]
+get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
+get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 
 """
 The model we consider consists of some parametric and nonparametric component, i.e.
@@ -34,7 +41,12 @@ mutable struct HybridSurrogate{RBF <: StationaryKernel, PBF <: ParametricReprese
     capacity::Int
 end
 
-mutable struct GaussianProcess{RBF <: StationaryKernel} <: AbstractSurrogate
+get_parametric_basis_matrix(as::HybridSurrogate) = as.P
+get_active_parametric_basis_matrix(s::HybridSurrogate) = @view get_parametric_basis_matrix(s)[1:get_observed(s), :]
+get_parametric_basis_function(s::HybridSurrogate) = s.ϕ
+get_parametric_component_coefficients(afs::HybridSurrogate) = afs.λ
+
+mutable struct Surrogate{RBF <: StationaryKernel} <: AbstractSurrogate
     ψ::RBF
     X::Matrix{Float64}
     K::Matrix{Float64}
@@ -46,19 +58,6 @@ mutable struct GaussianProcess{RBF <: StationaryKernel} <: AbstractSurrogate
     observed::Int
     capacity::Int
 end
-
-get_capacity(s::AbstractSurrogate) = s.capacity
-increment!(s::AbstractSurrogate) = s.observed += 1
-get_observed(s::AbstractSurrogate) = s.observed
-is_full(s::AbstractSurrogate) = get_observed(s) == get_capacity(s)
-get_active_covariates(s::AbstractSurrogate) = @view get_covariates(s)[:, 1:get_observed(s)]
-get_active_cholesky(s::AbstractSurrogate) = @view get_cholesky(s)[1:get_observed(s), 1:get_observed(s)]
-get_active_covariance(s::AbstractSurrogate) = @view get_covariance(s)[1:get_observed(s), 1:get_observed(s)]
-get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_observed(s)]
-get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
-get_active_parametric_basis_matrix(s::AbstractSurrogate) = @view get_parametric_basis_matrix(s)[1:get_observed(s), :]
-get_parametric_basis_function(s::AbstractSurrogate) = s.ϕ
-get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 
 
 # Define the custom show method for Surrogate
@@ -168,7 +167,7 @@ function HybridSurrogate(
     )
 end
 
-function GaussianProcess(
+function Surrogate(
     ψ::RadialBasisFunction,
     X::Matrix{T},
     y::Vector{T};
@@ -178,23 +177,12 @@ function GaussianProcess(
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     d, N = size(X)
 
-    """
-    Preallocate a matrix for covariates of size d x capacity where capacity is the maximum
-    number of observations.
-    """
     preallocated_X = zeros(d, capacity)
     preallocated_X[:, 1:N] = X
 
-    """
-    Preallocate a covariance matrix of size d x capacity
-    """
     preallocated_K = zeros(capacity, capacity)
-    KXX = eval_KXX(ψ, X)
-    preallocated_K[1:N, 1:N] = KXX + observation_noise * I
+    preallocated_K[1:N, 1:N] = eval_KXX(ψ, X) + observation_noise * I
 
-    """
-    Preallocate a matrix for the cholesky factorization of size d x capacity
-    """
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
     preallocated_L[1:N, 1:N] = cholesky(
         Hermitian(
@@ -202,19 +190,13 @@ function GaussianProcess(
         )
     ).L
 
-    """
-    Linear system solve for learning coefficients of stochastic component and parametric
-    component. 
-    """
     preallocated_d = zeros(capacity)
-    preallocated_d[1:N] = KXX \ y # should be using cholesky here
+    preallocated_d[1:N] = preallocated_L[1:N, 1:N]' \ (preallocated_L[1:N, 1:N] \ y)
 
     preallocated_y = zeros(capacity)
     preallocated_y[1:N] = y
 
-    observed = length(y)
-
-    return GaussianProcess(
+    return Surrogate(
         ψ,
         preallocated_X,
         preallocated_K,
@@ -223,7 +205,7 @@ function GaussianProcess(
         preallocated_d,
         observation_noise,
         decision_rule,
-        observed,
+        length(y),
         capacity
     )
 end
@@ -231,17 +213,18 @@ end
 """
 When the kernel is changed, we need to update d, K, and L
 """
-function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
+function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
     @views begin
-        # N = get_observed(s)
-        # s.ψ = kernel
-        # s.K[1:N, 1:N] .= eval_KXX(get_kernel(s), get_active_covariates(s), σn2=s.σn2)
-        # s.L[1:N, 1:N] .= LowerTriangular(
-        #     cholesky(
-        #         Hermitian(s.K[1:N, 1:N])
-        #     ).L
-        # )
-        # s.c[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
+        N = get_observed(s)
+        s.ψ = kernel
+        σn2 = get_observation_noise(s)
+        s.K[1:N, 1:N] .= eval_KXX(get_kernel(s), get_active_covariates(s)) + σn2 * I
+        s.L[1:N, 1:N] .= LowerTriangular(
+            cholesky(
+                Hermitian(s.K[1:N, 1:N])
+            ).L
+        )
+        s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
     end
 end
 
@@ -257,14 +240,25 @@ function resize(s::HybridSurrogate)
     )
 end
 
+function resize(s::Surrogate)
+    return Surrogate(
+        get_kernel(s),
+        get_covariates(s),
+        get_observations(s),
+        capacity=get_capacity(s) * DOUBLE,
+        decision_rule=get_decision_rule(s)
+    )
+end
 
-function insert!(s::HybridSurrogate, x::Vector{T}, y::T) where T <: Real
+
+function insert!(s::AbstractSurrogate, x::Vector{T}, y::T) where T <: Real
     insert_index = get_observed(s) + 1
     s.X[:, insert_index] = x
     s.y[insert_index] = y
 end
 
-function update_covariance!(s::HybridSurrogate, x::Vector{T}, y::T) where T <: Real
+
+function update_covariance!(s::AbstractSurrogate, x::Vector{T}, y::T) where T <: Real
     @views begin
         update_index = get_observed(s)
         active_X = get_covariates(s)[:, 1:update_index - 1]
@@ -278,7 +272,7 @@ function update_covariance!(s::HybridSurrogate, x::Vector{T}, y::T) where T <: R
     end
 end
 
-function update_cholesky!(s::HybridSurrogate)
+function update_cholesky!(s::AbstractSurrogate)
     # Grab entries from update covariance matrix
     @views begin
         n = get_observed(s)
@@ -311,6 +305,14 @@ function update_coefficients!(s::HybridSurrogate)
     end
 end
 
+function update_coefficients!(s::Surrogate)
+    update_index = get_observed(s)
+    @views begin
+        L = s.L[1:update_index, 1:update_index]
+        s.d[1:update_index] = L' \ (L \ s.y[1:update_index])
+    end
+end
+
 function update_parametric_design_matrix!(s::HybridSurrogate)
     @views begin
         update_index = get_observed(s)
@@ -330,6 +332,18 @@ function condition!(s::HybridSurrogate, xnew::Vector{T}, ynew::T) where T <: Rea
     update_coefficients!(s) # Updates coefficients d, λ
     return s
 end
+
+
+function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where T <: Real
+    if is_full(s) s = resize(s) end
+    insert!(s, xnew, ynew)
+    increment!(s)
+    update_covariance!(s, xnew, ynew)
+    update_cholesky!(s)
+    update_coefficients!(s)
+    return s
+end
+
 
 function eval(
     s::HybridSurrogate,
@@ -458,37 +472,100 @@ function eval(
 end
 
 
-(s::HybridSurrogate)(x, θ) = eval(s, x, θ)
+function eval(
+    s::Surrogate,
+    x::Vector{T},
+    θ::Vector{T}) where T<: Real
+    @views begin
+        sx = LazyStruct()
+        set(sx, :s, s)
+        set(sx, :x, x)
+        set(sx, :θ, θ)
+
+        active_index = get_observed(s)
+        X = get_active_covariates(s)
+        L = get_active_cholesky(s)
+        c = get_active_coefficients(s)
+        y = get_active_observations(s)
+        kernel = get_kernel(s)
+
+        d, N = size(X)
+
+        sx.kx = () -> eval_KxX(kernel, x, X)
+        sx.∇kx = () -> eval_∇KxX(kernel, x, X)
+
+        sx.μ = () -> dot(sx.kx, c)
+        sx.∇μ = () -> sx.∇kx * c
+        sx.dμ = () -> vcat(sx.μ, sx.∇μ)
+        sx.Hμ = function()
+            H = zeros(d, d)
+            for j = 1:N
+                H += c[j] * eval_Hk(kernel, x-X[:,j])
+            end
+            return H
+        end
+
+        sx.w = () -> L'\(L\sx.kx)
+        sx.Dw = () -> L'\(L\(sx.∇kx'))
+        sx.∇w = () -> sx.Dw'
+        sx.σ = () -> sqrt(kernel(0) - dot(sx.kx', sx.w))
+        sx.dσ = function()
+            kxx = eval_Dk(kernel, zeros(d))
+            kxX = [eval_KxX(kernel, x, X)'; eval_∇KxX(kernel, x, X)]
+            σx = Symmetric(kxx - kxX * (L' \ (L \ kxX')))
+            σx = cholesky(σx).L
+            return σx
+        end
+        sx.∇σ = () -> -(sx.∇kx * sx.w) / sx.σ
+        sx.Hσ = function()
+            H = -sx.∇σ * sx.∇σ' - sx.∇kx * sx.Dw
+            w = sx.w
+            for j = 1:N
+                H -= w[j] * eval_Hk(kernel, x-X[:,j])
+            end
+            H /= sx.σ
+            return H
+        end
+
+        sx.y = () -> y
+        sx.g = () -> get_decision_rule(s)
+
+        sx.dg_dμ = () -> first_partial(sx.g, symbol=:μ)(sx.μ, sx.σ, sx.θ, sx)
+        sx.dg_dσ = () -> first_partial(sx.g, symbol=:σ)(sx.μ, sx.σ, sx.θ, sx)
+        sx.dg_dθ = () -> first_partial(sx.g, symbol=:θ)(sx.μ, sx.σ, sx.θ, sx)
+
+        sx.d2g_dμ = () -> second_partial(sx.s.g, symbol=:μ)(sx.μ, sx.σ, sx.θ, sx)
+        sx.d2g_dσ = () -> second_partial(sx.s.g, symbol=:σ)(sx.μ, sx.σ, sx.θ, sx)
+        sx.d2g_dθ = () -> second_partial(sx.s.g, symbol=:θ)(sx.μ, sx.σ, sx.θ, sx)
+
+        sx.d2g_dμdθ = () -> mixed_partial(sx.s.g, symbol=:μθ)(sx.μ, sx.σ, sx.θ, sx)
+        sx.d2g_dσdθ = () -> mixed_partial(sx.s.g, symbol=:σθ)(sx.μ, sx.σ, sx.θ, sx)
+
+        sx.αxθ = () -> s.g(sx.μ, sx.σ, sx.θ, sx)
+
+        # Spatial derivatives
+        sx.∇αx = () -> sx.dg_dμ * sx.∇μ + sx.dg_dσ * sx.∇σ
+        sx.Hαx = () -> sx.d2g_dμ*sx.∇μ*sx.∇μ' + sx.dg_dμ*sx.Hμ + sx.d2g_dσ*sx.∇σ*sx.∇σ' + sx.dg_dσ*sx.Hσ
+       
+        # Hyperparameter derivatives
+        sx.∇αθ = () -> sx.dg_dθ
+        sx.Hαθ = () -> sx.d2g_dθ
+
+        # Mixed partials
+        sx.d2α_dσdθ = () -> sx.∇σ * sx.d2g_dσdθ'
+        sx.d2α_dμdθ = () -> sx.∇μ * sx.d2g_dμdθ'
+        sx.d2α_dxdθ = () -> sx.d2α_dμdθ + sx.d2α_dσdθ
+    end
+
+    return sx
+end
+
+(s::AbstractSurrogate)(x, θ) = eval(s, x, θ)
 eval(sx) = sx.αxθ
 gradient(sx; wrt_hypers=false) = wrt_hypers ? sx.∇αθ : sx.∇αx
 hessian(sx; wrt_hypers=false) = wrt_hypers ? sx.Hαθ : sx.Hαx
 mixed_partials(sx) = sx.d2α_dxdθ
 
-
-function gp_draw(
-    s::AS,
-    xloc::Vector{T},
-    θ::Vector{T};
-    stdnormal::Union{Vector{T}, T},
-    with_gradient::Bool = false,
-    fantasy_index::Union{Int64, Nothing} = nothing) where {T <: Real, AS <: AbstractSurrogate}
-    # We can actually embed this logic directly into the evaluation of the surrogate at some arbitrary location
-    dim = length(xloc)
-
-    if isnothing(fantasy_index)
-        sx = s(xloc, θ)
-    else
-        sx = s(xloc, θ, fantasy_index=fantasy_index)
-    end
-
-    if with_gradient
-        @assert length(stdnormal) == dim + 1 "stdnormal has dim = $(length(stdnormal)) but observation vector has dim = $(length(xloc))"
-        return sx.dμ + sx.dσ * stdnormal
-    else
-        @assert length(stdnormal) == 1 "Function observation expects a scalar gaussian random number"
-        return sx.μ + sx.σ * stdnormal
-    end
-end
 
 # ------------------------------------------------------------------
 # Operations for computing optimal hyperparameters.
@@ -533,12 +610,43 @@ function ∇log_likelihood(s::HybridSurrogate)
     return ∇L
 end
 
+function log_likelihood(s::Surrogate)
+    n = get_observed(s)
+    y = get_active_observations(s)
+    c = get_active_coefficients(s)
+    L = get_active_cholesky(s)
+    return -y'*c/2 - sum(log.(diag(L))) - n*log(2π)/2
+end
+
+function δlog_likelihood(s::Surrogate, δθ::Vector{T}) where T <: Real
+    kernel = get_kernel(s)
+    X = get_active_covariates(s)
+    δK = eval_Dθ_KXX(kernel, X, δθ)
+    c = get_active_coefficients(s)
+    L = get_active_cholesky(s)
+    return (c'*δK*c - tr(L'\(L\δK)))/2
+end
+
+function ∇log_likelihood(s::Surrogate)
+    nθ = length(s.ψ.θ)
+    δθ = zeros(nθ)
+    ∇L = zeros(nθ)
+
+    for j in 1:nθ
+        δθ[:] .= 0.0
+        δθ[j] = 1.0
+        ∇L[j] = δlog_likelihood(s, δθ)
+    end
+
+    return ∇L
+end
+
 """
 This only optimizes for lengthscale hyperparameter where the lengthscale is the
 same in each respective dimension.
 """
 function optimize!(
-    s::HybridSurrogate;
+    s::Surrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},
     optim_options = Optim.Options(iterations=30)) where T <: Real
