@@ -1,6 +1,6 @@
 get_hyperparameters(sk::AbstractKernel) = sk.θ
 
-"""
+@doc raw"""
 A radial basis function is defined strictly in terms of the pairwise distance between
 two locations. The representation below encodes this in terms of ρ = ||x - y||. The
 attribute ψ is a function defined on this distance metric, that is, ψ(ρ). We also care
@@ -167,6 +167,23 @@ function eval_KXX(rbf::RadialBasisFunction, X::AbstractMatrix{T}) where T <: Rea
     end
 
     return KXX
+end
+
+function eval_KXY(rbf::RadialBasisFunction, X::AbstractMatrix{T}, Y::AbstractMatrix{T}) where T <: Real
+    d1, N1 = size(X)
+    d2, N2 = size(Y)
+    KXY = zeros(N1, N2)
+
+    @views begin
+        for j = 1:N2
+            for i = 1:N1
+                Kij = rbf(norm(X[:, i] - Y[:, j]))
+                KXY[i, j] = Kij
+            end
+        end
+    end
+
+    return KXY
 end
 
 function eval_KxX(rbf::RadialBasisFunction, x::AbstractVector{T}, X::AbstractMatrix{T}) where T <: Real

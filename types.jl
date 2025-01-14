@@ -5,6 +5,3 @@ abstract type NonStationaryKernel <: AbstractKernel end
 abstract type AbstractSurrogate end
 abstract type AbstractParametricRepresentation end
 abstract type ParametricRepresentation <: AbstractParametricRepresentation end
-
-
-do_someting(k::AbstractKernel, x::T, y::T) where T <: AbstractVector = k(x, y)

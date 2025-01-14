@@ -1,5 +1,17 @@
-# TODO: Write function for computing the hessian design matrix `eval_Hbasis`
-# TODO: `basis_gradients` should maintain the collection of partials
+@doc raw"""
+    struct PolynomialBasisFunction <: ParametricRepresentation
+
+A representation of a polynomial basis function for use in parametric modeling, optimization, or approximation problems.
+This struct encapsulates the basis functions and provides gradients and Hessians computed via automatic differentiation.
+
+# Fields
+- `basis_functions::Vector{<:Function}`: A vector of functions representing the polynomial basis functions.
+    Each function takes input values (e.g., scalars or vectors) and returns the corresponding basis function value.
+- `basis_gradients::Vector{<:Function}`: A vector of functions representing the gradients of the basis functions.
+    These gradients are automatically computed using automatic differentiation tools.
+- `basis_hessians::Vector{<:Function}`: A vector of functions representing the Hessians of the basis functions.
+    These Hessians are automatically computed using automatic differentiation tools.
+"""
 struct PolynomialBasisFunction <: ParametricRepresentation
     basis_functions::Vector{<:Function}
     basis_gradients::Vector{<:Function}
@@ -80,26 +92,3 @@ end
 
 (pbf::PolynomialBasisFunction)(x::AbstractVector{T}) where T <: Real = eval_basis(pbf, x)
 (pbf::PolynomialBasisFunction)(X::AbstractMatrix{T}) where T <: Real = eval_basis(pbf, X)
-
-function eval_polynomial(
-    pbf::PolynomialBasisFunction,
-    x::AbstractVector{T1},
-    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real}
-    basis_evaluation = eval_basis(pbf, x)
-    return dot(basis_evaluation, c)
-end
-
-function eval_polynomial(
-    pbf::PolynomialBasisFunction,
-    X::AbstractMatrix{T1},
-    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real}
-    basis_evaluations = eval_basis(pbf, X)
-    return X*c
-end
-
-(pbf::PolynomialBasisFunction)(
-    x::AbstractVector{T1},
-    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, x, c)
-(pbf::PolynomialBasisFunction)(
-    X::AbstractMatrix{T1},
-    c::AbstractVector{T2}) where {T1 <: Real, T2 <: Real} = eval_polynomial(pbf, X, c)

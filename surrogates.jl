@@ -1,3 +1,4 @@
+# Useful functions for grabbing desired attributes on our structs
 get_kernel(afs::AbstractSurrogate) = afs.ψ
 get_covariates(afs::AbstractSurrogate) = afs.X
 get_observations(afs::AbstractSurrogate) = afs.y
@@ -24,17 +25,21 @@ normal c ∼ N(0, Σ) with Σ = (1/ϵ)Σ_{ref}^2, and P: Ω → R^m.
 We need to maintain information about the covariance function, which is our kernel,
 and the mechanism that allows us to construct our linear system given some polynomial
 basis.
+
+We also maintain how many the number of observations and our model's capacity, for computational
+considerations. We preallocate, for memory purposes, ahead of time. In the event we reach capacity,
+we double our model's capacity.
 """
 mutable struct HybridSurrogate{RBF <: StationaryKernel, PBF <: ParametricRepresentation} <: AbstractSurrogate
     ψ::RBF
     ϕ::PBF
-    X::Matrix{Float64}
-    P::Matrix{Float64}
-    K::Matrix{Float64}
-    L::LowerTriangular{Float64, Matrix{Float64}}
+    X::Matrix{Float64} # Covariates
+    P::Matrix{Float64} # Parametric term design matrix
+    K::Matrix{Float64} # Covariance matrix for Gaussian process
+    L::LowerTriangular{Float64, Matrix{Float64}} # Cholesky factorization of covariance matrix
     y::Vector{Float64}
-    d::Vector{Float64}
-    λ::Vector{Float64}
+    d::Vector{Float64} # Coefficients for Gaussian process
+    λ::Vector{Float64} # Coefficients for parametric/trend term
     observation_noise::Float64
     g::DecisionRule
     observed::Int
@@ -70,15 +75,50 @@ end
 get_decision_rule(s::AbstractSurrogate) = s.g
 set_decision_rule!(s::AbstractSurrogate, g::DecisionRule) = s.g = g
 
+@doc raw"""
+    coefficient_solve(
+        KXX::AbstractMatrix{T1},
+        PX::AbstractMatrix{T2},
+        y::AbstractVector{T3}
+    ) where {T1 <: Real, T2 <: Real, T3 <: Real}
+
+Solves a system of linear equations involving a block matrix structure to
+compute coefficients `d` and `λ`. The block matrix equation has the following
+form:
+
+    [KXX   PX]   [d]   =   [y]
+    [PX^T   0]   [λ]       [0]
+
+In this equation:
+- `KXX` is a square matrix of size k_dim by k_dim.
+- `PX` is a rectangular matrix of size k_dim by p_dim.
+- `y` is a vector of length k_dim.
+- `d` is a vector of length k_dim, representing the solution coefficients for
+    the top block of the system.
+- `λ` is a vector of length p_dim, representing the solution coefficients for
+    the bottom block of the system.
+
+# Arguments
+- `KXX::AbstractMatrix{T1}`: A square matrix of size k_dim by k_dim,
+    representing part of the block structure.
+- `PX::AbstractMatrix{T2}`: A rectangular matrix of size k_dim by p_dim,
+    representing the coupling between the blocks.
+- `y::AbstractVector{T3}`: A vector of length k_dim, representing the right-hand
+    side of the system for the top block.
+
+# Returns
+- `d`: A vector of length k_dim, representing the solution coefficients for the
+    top block of the system.
+- `λ`: A vector of length p_dim, representing the solution coefficients for the
+    bottom block of the system.
+"""
 function coefficient_solve(
     KXX::AbstractMatrix{T1},
     PX::AbstractMatrix{T2},
-    observation_noise::Float64,
     y::AbstractVector{T3}) where {T1 <: Real, T2 <: Real, T3 <: Real}
     p_dim, k_dim = size(PX, 2), size(KXX, 2)
     A = [KXX PX;
          PX' zeros(p_dim, p_dim)]
-    A = A + observation_noise * I
     F = lu(A)
     b = [y; zeros(p_dim)]
     w = F \ b
@@ -120,8 +160,8 @@ function HybridSurrogate(
     Preallocate a covariance matrix of size d x capacity
     """
     preallocated_K = zeros(capacity, capacity)
-    KXX = eval_KXX(ψ, X)
-    preallocated_K[1:N, 1:N] = KXX + observation_noise * I
+    KXX = eval_KXX(ψ, X) + observation_noise * I
+    preallocated_K[1:N, 1:N] = KXX
 
     """
     Preallocate a matrix for the cholesky factorization of size d x capacity
@@ -137,7 +177,7 @@ function HybridSurrogate(
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    d, λ = coefficient_solve(KXX, PX, observation_noise, y)
+    d, λ = coefficient_solve(KXX, PX, y)
 
     preallocated_d = zeros(capacity)
     preallocated_d[1:length(d)] = d
@@ -210,6 +250,7 @@ function Surrogate(
     )
 end
 
+
 """
 When the kernel is changed, we need to update d, K, and L
 """
@@ -228,6 +269,75 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
     end
 end
 
+function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
+    @views begin
+        N = get_observed(s)
+        s.ψ = kernel
+        σn2 = get_observation_noise(s)
+        s.K[1:N, 1:N] = eval_KXX(kernel, get_active_covariates(s)) + σn2 * I 
+        s.L[1:N, 1:N] = LowerTriangular(
+            cholesky(
+                Hermitian(s.K[1:N, 1:N])
+            ).L
+        )
+        d, λ = coefficient_solve(
+            get_active_covariance(s),
+            get_active_parametric_basis_matrix(s),
+            get_active_observations(s)
+        )
+        s.d[1:N] = d
+        s.λ[:] = λ
+    end
+end
+
+
+function reset!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where T <: Real
+    @views begin
+        d, N = size(X)
+
+        s.X[:, 1:N] = X
+        observation_noise = get_observation_noise(s)
+        K = eval_KXX(get_kernel(s), s.X[:, 1:N]) + observation_noise * I
+        s.K[1:N, 1:N] = K
+        s.L[1:N, 1:N] = LowerTriangular(
+            cholesky(
+                Hermitian(
+                    s.K[1:N, 1:N]
+                )
+            ).L
+        )
+        s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ y)
+        s.y[1:N] = y
+        s.observed = length(y)
+    end
+end
+
+function reset!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where T <: Real
+    @views begin
+        d, N = size(X)
+
+        s.X[:, 1:N] = X
+        observation_noise = get_observation_noise(s)
+        KXX = eval_KXX(get_kernel(s), s.X[:, 1:N]) + observation_noise * I
+        s.K[1:N, 1:N] = KXX
+        s.L[1:N, 1:N] = LowerTriangular(
+            cholesky(
+                Hermitian(
+                    s.K[1:N, 1:N]
+                )
+            ).L
+        )
+        ϕ = get_parametric_basis_function(s)
+        PX = eval_basis(ϕ, X)
+        s.P[1:N, 1:length(ϕ)] = PX
+        d, λ = coefficient_solve(KXX, PX, y)
+        s.d[1:N] = d
+        s.λ[1:length(ϕ)] = λ
+        s.observed = length(y)
+    end
+end
+
+
 function resize(s::HybridSurrogate)
     return HybridSurrogate(
         get_kernel(s),
@@ -239,6 +349,7 @@ function resize(s::HybridSurrogate)
         observation_noise=get_observation_noise(s)
     )
 end
+
 
 function resize(s::Surrogate)
     return Surrogate(
@@ -296,9 +407,8 @@ function update_coefficients!(s::HybridSurrogate)
     update_index = get_observed(s)
     KXX = get_active_covariance(s)
     PX = get_active_parametric_basis_matrix(s)
-    observation_noise = get_observation_noise(s)
     y = get_active_observations(s)
-    d, λ = coefficient_solve(KXX, PX, observation_noise, y)
+    d, λ = coefficient_solve(KXX, PX, y)
     @views begin
         s.d[1:length(d)] = d
         s.λ[:] = λ
@@ -392,47 +502,36 @@ function eval(
             return H
         end
 
-        # The variables v and w represent 
-        sx.w = () -> (sx.px / P)' # P' \ sx.px'
-        sx.v = () -> P \ (sx.kx - K*sx.w)
-        sx.∇w = () -> (sx.∇px / P)'
-        sx.∇v = () -> P \ (sx.∇kx - K*sx.∇w)
-        sx.weighted_Hw = function()
-            Hpx = eval_Hbasis(parametric_basis, x)
-            weighted_Hw = zeros(dim, dim)
-
-            for i in 1:dim
-                for j in 1:dim
-                    row_Hpx = reshape(Hpx[i, j, :, :], 1, length(parametric_basis))
-                    Hw_ij = (row_Hpx / P)'
-                    # Computes the mixed partial at indices i, j
-                    weighted_Hw[i, j] = dot(sx.c0, Hw_ij)
-                end
-            end
-            
-            return weighted_Hw
-        end
-
         # Reused terms c_i
         sx.c0 = () -> K*sx.w - sx.kx
 
         # Predictive standard deviation and its gradient and hessian
-        sx.σ = function ()
-            kxx = kernel(0)
-            b = [sx.px sx.kx']
-            return sqrt(kxx - dot(b, [sx.v; sx.w]))
+        sx.A = function()
+            zz = zeros(length(parametric_basis), length(parametric_basis))
+            A = [zz P';
+                 P  K]
+            return A
         end
-        sx.∇σ = () -> (sx.∇w'*sx.c0 - sx.w'*sx.∇kx') / sx.σ
+        sx.v = () -> [sx.px sx.kx']'
+        sx.∇v = () -> [hsx.∇px hsx.∇kx]
+        sx.w = () -> sx.A \ sx.v
+        sx.∇w = () -> sx.A \ sx.∇v'
+        sx.σ = () -> sqrt(kernel(0) - dot(sx.v, sx.w))
+        sx.∇σ = () -> -(sx.∇v * sx.w) / sx.σ
         sx.Hσ = function()
-            H = -sx.∇σ * sx.∇σ' - sx.∇w' * sx.∇kx' + sx.∇w'*(K*sx.∇w - sx.∇kx')
+            H = sx.∇σ * sx.∇σ' + sx.∇v * sx.∇w
             w = sx.w
 
-            for j in 1:length(w)
-                H -= w[j] * eval_Hk(kernel, x - X[:, j])
+            HP = eval_Hbasis(parametric_basis, x)
+            for j in 1:length(λ)
+                H += w[j] * HP[:, :, 1, j]
+            end
+            
+            for j in length(λ)+1:length(w)
+                H += w[j] * eval_Hk(kernel, x - X[:, j - length(λ)])
             end
 
-            H += sx.weighted_Hw
-            H /= sx.σ
+            H /= -sx.σ
 
             return H
         end
@@ -584,7 +683,7 @@ function log_likelihood(s::HybridSurrogate)
     A = [zeros(m, m) P';
          P           K]
 
-    return -dot(yz, dλ)/2 - n*log(2π)/2 - log(det(A))
+    return -dot(yz, dλ)/2 - n*log(2π)/2 - log(abs(det(A)))
 end
 
 function δlog_likelihood(s::HybridSurrogate, δθ::Vector{T}) where T <: Real
