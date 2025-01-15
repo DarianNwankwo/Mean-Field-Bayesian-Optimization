@@ -689,24 +689,23 @@ end
 function δlog_likelihood(s::HybridSurrogate, δθ::Vector{T}) where T <: Real
     kernel = get_kernel(s)
     X = get_active_covariates(s)
+    pdim = length(get_parametric_basis_function(s))
+    kdim = size(X, 2)
+    zz = zeros(pdim, pdim)
+    zkp = zeros(kdim, pdim)
+
     δK = eval_Dθ_KXX(kernel, X, δθ)
-    c = get_active_coefficients(s)
-    L = get_active_cholesky(s)
-    return (c'*δK*c - tr(L'\(L\δK)))/2
-end
-
-function ∇log_likelihood(s::HybridSurrogate)
-    nθ = length(s.ψ.θ)
-    δθ = zeros(nθ)
-    ∇L = zeros(nθ)
-
-    for j in 1:nθ
-        δθ[:] .= 0.0
-        δθ[j] = 1.0
-        ∇L[j] = δlog_likelihood(s, δθ)
-    end
-
-    return ∇L
+    δKhat = [δK   zkp;
+             zkp' zz]
+    d = get_active_coefficients(s)
+    λ = get_parametric_component_coefficients(s)
+    dλ = [d; λ]
+    K = get_active_cholesky(s)
+    P = get_active_parametric_basis_matrix(s)
+    
+    Khat = [K  P;
+            P' zz]
+    return (dλ'*δKhat*dλ - tr(Khat\δKhat))/2
 end
 
 function log_likelihood(s::Surrogate)
@@ -726,7 +725,7 @@ function δlog_likelihood(s::Surrogate, δθ::Vector{T}) where T <: Real
     return (c'*δK*c - tr(L'\(L\δK)))/2
 end
 
-function ∇log_likelihood(s::Surrogate)
+function ∇log_likelihood(s::AbstractSurrogate)
     nθ = length(s.ψ.θ)
     δθ = zeros(nθ)
     ∇L = zeros(nθ)
@@ -745,12 +744,13 @@ This only optimizes for lengthscale hyperparameter where the lengthscale is the
 same in each respective dimension.
 """
 function optimize!(
-    s::Surrogate;
+    s::AbstractSurrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},
     optim_options = Optim.Options(iterations=30)) where T <: Real
 
     function fg!(F, G, θ::Vector{T}) where T <: Real
+        print("θ=$θ | ")
         set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
         if G !== nothing G .= -∇log_likelihood(s) end
         if F !== nothing return -log_likelihood(s) end
