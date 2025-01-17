@@ -22,7 +22,7 @@ function Base.show(io::IO, r::RadialBasisFunction{T}) where T
     print(io, "RadialBasisFunction{", T, "}")
 end
 
-(rbf::RadialBasisFunction)(ρ) = rbf.ψ(ρ)
+(rbf::RadialBasisFunction)(ρ::Real) = rbf.ψ(ρ)
 derivative(rbf::RadialBasisFunction) = rbf.Dρ_ψ
 second_derivative(rbf::RadialBasisFunction) = rbf.Dρρ_ψ
 hypersgradient(rbf::RadialBasisFunction) = rbf.∇θ_ψ
@@ -168,6 +168,7 @@ function eval_KXX(rbf::RadialBasisFunction, X::AbstractMatrix{T}) where T <: Rea
 
     return KXX
 end
+(rbf::RadialBasisFunction)(X::AbstractMatrix{T}) where T <: Real = eval_KXX(rbf, X)
 
 function eval_KXY(rbf::RadialBasisFunction, X::AbstractMatrix{T}, Y::AbstractMatrix{T}) where T <: Real
     d1, N1 = size(X)
@@ -185,6 +186,7 @@ function eval_KXY(rbf::RadialBasisFunction, X::AbstractMatrix{T}, Y::AbstractMat
 
     return KXY
 end
+(rbf::RadialBasisFunction)(X::AbstractMatrix{T}, Y::AbstractMatrix{T}) where T <: Real = eval_KXY(rbf, X, Y)
 
 function eval_KxX(rbf::RadialBasisFunction, x::AbstractVector{T}, X::AbstractMatrix{T}) where T <: Real
     d, N = size(X)
@@ -198,6 +200,7 @@ function eval_KxX(rbf::RadialBasisFunction, x::AbstractVector{T}, X::AbstractMat
 
     return KxX
 end
+(rbf::RadialBasisFunction)(x::AbstractVector{T}, X::AbstractMatrix{T}) where T <: Real = eval_KxX(rbf, x, X)
 
 function eval_∇KxX(rbf::RadialBasisFunction, x::AbstractVector{T}, X::AbstractMatrix{T}) where T <: Real
     d, N = size(X)
