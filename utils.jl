@@ -92,10 +92,6 @@ end
 
 centered_fd(f, u, du, h) = (f(u+h*du)-f(u-h*du)) / (2h)
 
-"""
-Early Stopping without a Validation Set: `https://arxiv.org/abs/1703.09580`
-"""
-
 function gap(initial_best::T, observed_best::T, actual_best::T) where T <: Real
     return (initial_best - observed_best) / (initial_best - actual_best)
 end
@@ -142,11 +138,4 @@ function write_to_csv(filename::String, data::Vector{T}) where T <: Real
         Tables.table(data'),
         append=true
     )
-end
-
-function to(n; key="MB")
-    mapping = Dict("KB" => 1, "MB" => 2, "GB" => 3)
-    factor = mapping[key]
-    conversion = n / (1024 ^ mapping[key])
-    return "$(conversion)$(key)"
 end
