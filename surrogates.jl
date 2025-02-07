@@ -513,7 +513,7 @@ function eval(
             return A
         end
         sx.v = () -> [sx.px sx.kx']'
-        sx.∇v = () -> [hsx.∇px hsx.∇kx]
+        sx.∇v = () -> [sx.∇px sx.∇kx]
         sx.w = () -> sx.A \ sx.v
         sx.∇w = () -> sx.A \ sx.∇v'
         sx.σ = () -> sqrt(kernel(0) - dot(sx.v, sx.w))
@@ -679,11 +679,10 @@ function log_likelihood(s::HybridSurrogate)
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
 
-    # Do the log determinant stuff here
-    A = [zeros(m, m) P';
+    M = [zeros(m, m) P';
          P           K]
 
-    return -dot(yz, dλ)/2 - n*log(2π)/2 - log(abs(det(A)))
+    return -dot(yz, dλ)/2 - n*log(2π)/2 - log(abs(det(M)))
 end
 
 function δlog_likelihood(s::HybridSurrogate, δθ::Vector{T}) where T <: Real
