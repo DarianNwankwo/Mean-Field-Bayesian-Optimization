@@ -12,8 +12,88 @@ function gen_uniform(samples; dim=1)
     S
 end
 
-function is_odd(num)
-    return mod(num,2) == 1
+
+
+@doc raw"""
+The experiments we want to conduct will inform us of the utility of the proposed hybrid model for doing Bayesian optimization when you know something about the mean field a priori. Our baseline model will be a standard zero mean Gaussian process. We will use a common set of synthetic test functions to evaluate our optimization algorithm. For each synthetic function, we want to consider the following perturbations:
+1. Zero mean field trend
+2. Constant mean field trend
+3. Linear mean field trend
+4. Nonlinear mean field trend
+For each one these considerations, we also want to measure how standard acquisition functions absorb the information presented by the statistical model of choice.
+
+For each of the perturbations specified, we want to construct a surrogate that has each of those trends encoded into their model. This, in some sense, is to measure model misspecification. So, for each test function, we’ll have a trend added to it and construct 4 models and perform the full Bayesian optimization loop (with EI, POI, and LCB) and collect the following metrics:
+1. Simple regret
+2. Gap
+3. Model’s observation at each iteration
+All of this metadata needs to be maintained as well. The structure might look something like the following:
+1. <function_name>
+    1. no_trend
+        * zero_trend_surrogate
+            * gap.csv
+            * simple_regret.csv
+            * observations.csv
+            * minimum_observations.csv
+            * trend.txt
+        * constant_trend_surrogate
+            * gap.csv
+            * simple_regret.csv
+            * observations.csv
+            * minimum_observations.csv
+            * trend.txt
+        * linear_trend_surrogate
+            * gap.csv
+            * simple_regret.csv
+            * observations.csv
+            * minimum_observations.csv
+            * trend.txt
+        * nonlinear_trend_surrogate
+            * gap.csv
+            * simple_regret.csv
+            * observations.csv
+            * minimum_observations.csv
+            * trend.txt
+        * trend.txt (contains exact trend added to the test function)
+    2. constant_trend
+    3. linear_trend
+    4. nonlinear_trend
+    5. global_minimizer.txt
+Where the first child directory under the function name denotes the test function that is being evaluated. The trend term is encoded in the directory’s name.
+"""
+function create_directory_structure(
+    function_name::String,
+    function_trends::Vector{String},
+    surrogate_trends::Vector{String})
+    # Parent directory of script being executed
+    experiments_dir = dirname(abspath(PROGRAM_FILE))
+
+    # Create the path for the sibling `data` directory
+    data_dir = joinpath(experiments_dir, "data")
+
+    # Create the path for the <function_name> directory 
+    function_name_dir = joinpath(data_dir, function_name)
+
+    # Create all of the subdirectories
+    for ft in function_trends
+        for st in surrogate_trends
+            # Creates the path for the trend of the function being modeled
+            trend_sub_dir = joinpath(function_name_dir, "$(ft)_trend")
+
+            # Creates the path for the trend of the parametric component of the
+            # hybrid model
+            surrogate_sub_dir = joinpath(trend_sub_dir, "$(st)_trend_surrogate")
+            if !isdir(surrogate_sub_dir)
+                mkpath(surrogate_sub_dir)
+            end
+
+            # Create trend.txt metadata and other metric files for each surrogate
+            filenames = ["trend.txt", "gap.csv", "simple_regret.csv", "observations.csv", "minimum_observations.csv"]
+            [touch("$(surrogate_sub_dir)/$(fn)") for fn in filenames]
+        end
+    end
+
+    # Create global_minimizer.txt file for <function_name>'s global minimizer
+    touch("$(function_name_dir)/global_minimizer.txt")
 end
 
 """
@@ -88,9 +168,6 @@ function stdize(series; a=0, b=1)
     smax, smin = maximum(series), minimum(series)
     return [a + (s - smin) / (smax - smin) * (b - a) for s in series]
 end
-
-
-centered_fd(f, u, du, h) = (f(u+h*du)-f(u-h*du)) / (2h)
 
 function gap(initial_best::T, observed_best::T, actual_best::T) where T <: Real
     return (initial_best - observed_best) / (initial_best - actual_best)
