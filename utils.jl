@@ -61,9 +61,9 @@ All of this metadata needs to be maintained as well. The structure might look so
 Where the first child directory under the function name denotes the test function that is being evaluated. The trend term is encoded in the directory’s name.
 """
 function create_directory_structure(
-    function_name::String,
-    function_trends::Vector{String},
-    surrogate_trends::Vector{String})
+    function_name,
+    function_trends,
+    surrogate_trends)
     # Parent directory of script being executed
     experiments_dir = dirname(abspath(PROGRAM_FILE))
 
