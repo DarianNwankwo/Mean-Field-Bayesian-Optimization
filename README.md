@@ -13,4 +13,10 @@ Improvement. We demonstrate the effectiveness of this framework through empirica
 synthetic and real-world benchmarks, showcasing significant gains in optimization performance 
 and sample efficiency.
 
-## Software Design
+## Considerations and Issues
+<b>Minimizing the Negative Log Likelihood for the Hybrid Model</b>
+
+The optimizer for learning the optimal hyperparameters seems to iterate beyond the point of marginal gains.
+I need to investigate why, when I provided tolerances on the conditions for convergence, the optimizer
+continues to seek gains.
+

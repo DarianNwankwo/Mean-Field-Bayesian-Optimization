@@ -16,10 +16,18 @@ gradient(testfn::TestFunction) = testfn.∇f
 
 # Apply the function or its gradient to each column of the matrix
 function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T <: Real
-    return map(
-        !grad ? testfn.f : testfn.∇f,
-        eachcol(X)
-    )
+    N = size(X, 2)
+    y = zeros(N)
+
+    for i in 1:N
+        y[i] = testfn(X[:, i])
+    end
+
+    return y
+    # return map(
+    #     !grad ? testfn.f : testfn.∇f,
+    #     eachcol(X)
+    # )
 end
 
 

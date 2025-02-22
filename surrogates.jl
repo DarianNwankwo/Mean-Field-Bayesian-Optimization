@@ -702,8 +702,8 @@ function δlog_likelihood(s::HybridSurrogate, δθ::Vector{T}) where T <: Real
     K = get_active_cholesky(s)
     P = get_active_parametric_basis_matrix(s)
     
-    Khat = [K  P;
-            P' zz]
+    Khat = [zz  P';
+            P K]
     return (dλ'*δKhat*dλ - tr(Khat\δKhat))/2
 end
 
@@ -746,10 +746,12 @@ function optimize!(
     s::AbstractSurrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},
-    optim_options = Optim.Options(iterations=30)) where T <: Real
+    optim_options = Optim.Options(
+        iterations=30
+    )) where T <: Real
 
     function fg!(F, G, θ::Vector{T}) where T <: Real
-        print("θ=$θ | ")
+        println("θ=$θ")
         set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
         if G !== nothing G .= -∇log_likelihood(s) end
         if F !== nothing return -log_likelihood(s) end
