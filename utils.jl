@@ -63,7 +63,11 @@ Where the first child directory under the function name denotes the test functio
 function create_directory_structure(
     function_name,
     function_trends,
-    surrogate_trends)
+    surrogate_trends,
+    filenames)
+    # Create a mapping to maintain file paths for experimental metrics
+    filepath_mappings = Dict(function_name => Dict())
+
     # Parent directory of script being executed
     experiments_dir = dirname(abspath(PROGRAM_FILE))
 
@@ -75,25 +79,28 @@ function create_directory_structure(
 
     # Create all of the subdirectories
     for ft in function_trends
+        filepath_mappings[function_name][ft] = Dict()
         for st in surrogate_trends
+            filepath_mappings[function_name][ft][st] = filenames
+
             # Creates the path for the trend of the function being modeled
-            trend_sub_dir = joinpath(function_name_dir, "$(ft)_trend")
+            trend_sub_dir = joinpath(function_name_dir, "$(ft)")
 
             # Creates the path for the trend of the parametric component of the
             # hybrid model
-            surrogate_sub_dir = joinpath(trend_sub_dir, "$(st)_trend_surrogate")
+            surrogate_sub_dir = joinpath(trend_sub_dir, "$(st)")
             if !isdir(surrogate_sub_dir)
                 mkpath(surrogate_sub_dir)
             end
 
-            # Create trend.txt metadata and other metric files for each surrogate
-            filenames = ["trend.txt", "gap.csv", "simple_regret.csv", "observations.csv", "minimum_observations.csv"]
             [touch("$(surrogate_sub_dir)/$(fn)") for fn in filenames]
         end
     end
 
     # Create global_minimizer.txt file for <function_name>'s global minimizer
     touch("$(function_name_dir)/global_minimizer.txt")
+
+    return filepath_mappings
 end
 
 """
@@ -120,6 +127,28 @@ function box_muller_transform(S)
     end
     
     N
+end
+
+function get_trends(bias, dim)
+    surrogate_trends = [
+        PolynomialBasisFunction([x -> 0.]),
+        PolynomialBasisFunction([x -> bias]),
+        PolynomialBasisFunction([x -> x[i] for i in 1:dim]),
+        PolynomialBasisFunction([x -> bias, x -> dot(x, x)])
+    ]
+
+    coefficients = [
+        [1.],
+        [1.],
+        ones(dim),
+        ones(dim + 1)
+    ]
+
+    initial_observation_sizes = [1, 1, dim, dim + 1]
+
+    function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i]) for i in 1:length(coefficients)]
+
+    return surrogate_trends, function_trends, initial_observation_sizes
 end
 
 dense_1D_discretization(;lb, ub, stepsize) = lb:stepsize:ub

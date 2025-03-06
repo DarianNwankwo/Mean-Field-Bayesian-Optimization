@@ -20,3 +20,10 @@ The optimizer for learning the optimal hyperparameters seems to iterate beyond t
 I need to investigate why, when I provided tolerances on the conditions for convergence, the optimizer
 continues to seek gains.
 
+<b>On Setting the Basis Functions and Kernel for the Hybrid Model</b>
+We employ a constructor that preallocates our linear systems, however, we need to specify our kernel and polynomial
+basis functions after this. Setting the kernel assumes the covariates and observations are already known, whereas
+setting the polynomial basis functions does not. This may produce an error if not careful.
+
+## Experimental Setup
+The script will run evaluate a batch of test functions at a time. Now, we need to consider how we'll setup the remaining loops: trials, bo iterations, each surrogate model, and various acquisition functions.

@@ -17,7 +17,7 @@ end
 
 function +(testfn::TestFunction, pt::PolynomialTrend)
     new_f = (x) -> testfn.f(x) + pt(x)
-    new_∇f = (x) -> testfn.∇f(x) + gradient(pt, x)  # Adding constant gradient
+    new_∇f = (x) -> testfn.∇f(x) + gradient(pt, x) 
     
     return TestFunction(
         testfn.dim,

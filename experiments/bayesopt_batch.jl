@@ -1,5 +1,6 @@
 using ArgParse
 
+CONSTANT_TREND = 1.
 
 @doc raw"""parse_command_line
 
@@ -18,6 +19,11 @@ function parse_command_line(args)
             action = :store_arg
             help = "Number of random starts for solving the acquisition function (default: 64)"
             default = 64
+            arg_type = Int
+        "--kernel-starts"
+            action = :store_arg
+            help = "Number of random starts for learning hyperparameters"
+            default = 16
             arg_type = Int
         "--trials"
             action = :store_arg
@@ -46,8 +52,10 @@ end
 include("../bayesian_optimization.jl")
 
 
+
 function main()
     cli_args = parse_command_line(ARGS)
+    observation_noise = 1e-6
 
     # Establish the synthetic functions we want to evaluate our algorithms on.
     testfn_payloads = Dict(
@@ -104,36 +112,120 @@ function main()
     testfn_names = split(cli_args["function-names"], ",")
 
     # Function trends and surrogate parametric trends
-    trend_names = ["zero", "constant", "linear", "nonlinear"]
+    function_trend_names = [
+        "zero_trend",
+        "constant_trend",
+        "linear_trend",
+        "nonlinear_trend"
+    ]
+
+    surrogate_trend_names = [
+        "zero_trend_surrogate",
+        "constant_trend_surrogate",
+        "linear_trend_surrogate",
+        "nonlinear_trend_surrogate"
+    ]
+
+    # Create trend.txt metadata and other metric files for each surrogate
+    filenames = ["trend.txt", "gap.csv", "simple_regret.csv", "observations.csv", "minimum_observations.csv"]
+
+    # Create directory to store payload for given test function
+    filepath_mappings = Dict()
     for testfn_name in testfn_names
-        create_directory_structure(testfn_name, trend_names, trend_names)
+        fpm = create_directory_structure(
+            testfn_name, function_trend_names, surrogate_trend_names, filenames
+        )
+        filepath_mappings[testfn_name] = fpm[testfn_name]
     end
 
-    # # Create directory to store payload for given test function
-    # testfn_name = cli_args["function-name"]
-    # create_directory(testfn_name)
+    # Create CSVs for each metric we care to maintain
+    metrics_to_collect = ["gaps", "simple_regret"]
 
-    # # Collect trends: Zero, Constant, Linear, Nonlinear
-    # trends = nothing
+    # Surrogate hyperparameters
+    kernel = Matern52()
+    kernel_lbs, kernel_ubs = [.1], [5.]
+    decision_rule_hyperparameters = [0.]
+    hyperparameter_optimizer_starts = generate_initial_guesses(cli_args["kernel-starts"], kernel_lbs, kernel_ubs)
+    
+    acquisition_functions = [EI(), POI(), LCB()]
 
-    # # Instantiate test function object from testfn payload mapping
-    # payload = testfn_payloads[testfn_name]
-    # testfn = payload.fn(payload.args...)
-    # testfns_with_trend = [payload.fn(payload.args...) + trend for trend in trends]
-    # vcat!(testfns_with_trend, testfn)
+    for testfn_name in testfn_names
+        # Exract the current test function from the batch of test functions
+        payload = testfn_payloads[testfn_name]
+        testfn = payload.fn(payload.args...)
+        spatial_lbs, spatial_ubs = get_bounds(testfn)
 
-    # # Add arbitrary trend to test function
+        # Generate the initial starts for the inner optimizer
+        inner_optimizer_starts = generate_initial_guesses(cli_args["starts"], spatial_lbs, spatial_ubs)
+        
+        # Generate surrogate and function trends to offset the test function with
+        surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
 
-    # # Create CSVs for each metric we care to maintain
-    # metrics_to_collect = ["gaps", "simple_regret"]
+        # Initialize surrogates with preallocated memory to support the full BO loop
+        ios = initial_observation_sizes
+        surrogates = [
+            Surrogate(
+                Matern52(), dim=testfn.dim, capacity=cli_args["budget"] + ios[1], observation_noise=observation_noise
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[2], dim=testfn.dim, capacity=cli_args["budget"] + ios[2], observation_noise=observation_noise
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[3], dim=testfn.dim, capacity=cli_args["budget"] + ios[3], observation_noise=observation_noise
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[4], dim=testfn.dim, capacity=cli_args["budget"] + ios[4], observation_noise=observation_noise
+            )
+        ]
 
-    # # Initialize surrogates with preallocated memory to support the full BO loop
-    # hybrid_surrogate = HybridSurrogate
-    # surrogate = 
-    # surrogates = []
+        for af in acquisition_functions
+            println("\nAcquisition Function: $(af)")
+            for (i, trend) in enumerate(function_trends)
+                println("Function Trend Name: $(function_trend_names[i])")
+                # Augment the testfn with a trend
+                testfn_with_trend = testfn + trend
 
-    # acquisition_functions = [EI(), POI(), LCB()]
+                for (j, surrogate) in enumerate(surrogates)
+                    println("Surrogate Name: $(surrogate_trend_names[j])")
+                    set_decision_rule!(surrogate, af)
 
+                    for tfn in [testfn, testfn_with_trend]  
+                        println("Beginning Several Trials for $(testfn_name) Test Function")
+                        for trial in 1:cli_args["trials"]
+                            println("Trial #$trial")
+                            # Generate `m` number of initial samples where `m` is the number
+                            # of basis functions in P(x)
+                            M = ios[j]
+                            
+                            # Gather initial design for our statistical model
+                            Xinit = randsample(M, tfn.dim, spatial_lbs, spatial_ubs)
+                            yinit = tfn(Xinit) + observation_noise * randn(M)
+                            
+                            # Set the correct entries in the preallocated surrogate
+                            set!(surrogate, Xinit, yinit)
+                            initial_minimum = minimum(yinit)
+
+                            # Perform Bayesian optimization loop
+                            surrogate = bayesian_optimize!(
+                                surrogate=surrogate,
+                                testfn=tfn,
+                                spatial_lbs=spatial_lbs,
+                                spatial_ubs=spatial_ubs,
+                                kernel_lbs=kernel_lbs,
+                                kernel_ubs=kernel_ubs,
+                                decision_rule_hyperparameters=decision_rule_hyperparameters,
+                                inner_optimizer_starts=inner_optimizer_starts,
+                                hyperparameter_optimizer_starts=hyperparameter_optimizer_starts,
+                                budget=cli_args["budget"]
+                            )
+                            println()
+                        end
+                    end
+                end
+            end
+            println()
+        end
+    end
 
 
 end

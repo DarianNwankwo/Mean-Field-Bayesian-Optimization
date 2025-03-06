@@ -1,5 +1,5 @@
 function base_solve(
-    surrogate::HybridSurrogate;
+    surrogate::AbstractSurrogate;
     spatial_lbs::Vector{T},
     spatial_ubs::Vector{T},
     xstart::Vector{T},
@@ -25,15 +25,14 @@ function base_solve(
     dfc = TwiceDifferentiableConstraints(spatial_lbs, spatial_ubs)
     res = optimize(
         df, dfc, xstart, IPNewton(),
-        Optim.Options(x_tol=1e-3, f_tol=1e-3)
+        Optim.Options(x_tol=1e-3, f_tol=1e-3, outer_iterations=10)
     )
     
     return Optim.minimizer(res), res
 end
 
-
 function multistart_base_solve!(
-    surrogate::HybridSurrogate,
+    surrogate::AbstractSurrogate,
     xfinal::Vector{T};
     spatial_lbs::Vector{T},
     spatial_ubs::Vector{T},
