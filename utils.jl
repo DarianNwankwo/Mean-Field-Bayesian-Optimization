@@ -143,12 +143,13 @@ function get_trends(bias, dim)
         PolynomialBasisFunction([x -> bias, x -> dot(x, x)])
     ]
 
-    coefficients = [
-        [1.],
-        [1.],
-        ones(dim),
-        ones(dim + 1)
-    ]
+    # coefficients = [
+    #     [1.],
+    #     [1.],
+    #     ones(dim),
+    #     ones(dim + 1)
+    # ]
+    coefficients = [ones(length(pbf)) for pbf in surrogate_trends]
 
     initial_observation_sizes = [1, 1, dim, dim + 1]
 
