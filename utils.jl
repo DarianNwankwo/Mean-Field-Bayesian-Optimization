@@ -336,3 +336,16 @@ function write_minimum_observations_to_disk(path_prefix, minimum_observations::A
         append=true
     )
 end
+
+
+function write_global_minimizer_to_disk(path_prefix, testfn::TestFunction)
+    abspath = path_prefix * "global_minimizer.txt"
+    f_minimizer = testfn.xopt[1]
+    f_minimum = testfn(f_minimizer)
+
+    # Option 1: Using open within a do block
+    open(abspath, "w") do file
+        write(file, "Minimizer: $(string(f_minimizer))\n")
+        write(file, "Minimum: $(f_minimum)\n")
+    end
+end

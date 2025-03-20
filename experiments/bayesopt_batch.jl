@@ -161,6 +161,12 @@ function main()
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
 
+    # Total number of iterations for ProgressMeter
+    NUM_TRENDS = 4
+    NUM_SURROGATES = 4
+    total_iterations = length(testfn_names) * length(acquisition_functions) * NUM_TRENDS * NUM_SURROGATES * cli_args["trials"]
+    progress = ProgressMeter.Progress(total_iterations, dt=1.)
+
     for testfn_name in testfn_names
         # Exract the current test function from the batch of test functions
         payload = testfn_payloads[testfn_name]
@@ -199,6 +205,9 @@ function main()
                 tfn = testfn + trend
                 tft_name = function_trend_names[i]
 
+                minimizer_path_prefix = "$current_directory/data/$testfn_name/"
+                write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
+
                 for (j, surrogate) in enumerate(surrogates)
                     # println("Surrogate Name: $(surrogate_trend_names[j])")
                     set_decision_rule!(surrogate, af)
@@ -208,6 +217,10 @@ function main()
                     # Extract minimizer from testfunction
                     actual_minimum = tfn(tfn.xopt[1])
                     num_initial_observations = ios[j]
+
+                    # Construct path to directory maintaining current experiments data
+                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$af_name/"
+                    # write_trend_to_disk(path_prefix)
 
                     for trial in 1:cli_args["trials"]
                         # println("Trial #$trial")
@@ -239,19 +252,13 @@ function main()
                         update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
                         update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
 
-
-                        path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$af_name/"
+                        # Write performance metrics to disk.
                         write_gaps_to_disk(path_prefix, gaps, trial)
                         write_observations_to_disk(path_prefix, observations, trial)
                         write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
                         write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
-                        # write_trend_to_disk()
-                        # println("Saving to: $(path_prefix)")
-                        # println("\nLocations: $(get_covariates(surrogate))")
-                        # println("Observations ($num_initial_observations): $observations")
-                        # println("True Minimum: $actual_minimum")
-                        # println("GAPS: $gaps")
-                        # println("Simple Regrets: $simple_regrets")
+
+                        ProgressMeter.next!(progress)
                     end
                 end
             end
