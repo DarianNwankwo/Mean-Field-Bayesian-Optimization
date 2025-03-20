@@ -61,6 +61,7 @@ include("../bayesian_optimization.jl")
 
 function main()
     cli_args = parse_command_line(ARGS)
+    println("Initializing Experimental Design...")
 
     # Establish the synthetic functions we want to evaluate our algorithms on.
     testfn_payloads = Dict(
@@ -167,7 +168,9 @@ function main()
     total_iterations = length(testfn_names) * length(acquisition_functions) * NUM_TRENDS * NUM_SURROGATES * cli_args["trials"]
     progress = ProgressMeter.Progress(total_iterations, dt=1.)
 
+    println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
+        println("Test Function Being Evaluated: $testfn_name")
         # Exract the current test function from the batch of test functions
         payload = testfn_payloads[testfn_name]
         testfn = payload.fn(payload.args...)
