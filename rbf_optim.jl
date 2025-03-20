@@ -25,7 +25,7 @@ function base_solve(
     dfc = TwiceDifferentiableConstraints(spatial_lbs, spatial_ubs)
     res = optimize(
         df, dfc, xstart, IPNewton(),
-        Optim.Options(x_tol=1e-3, f_tol=1e-3, outer_iterations=10)
+        Optim.Options(x_tol=1e-3, f_tol=1e-3, time_limit=NEWTON_SOLVE_TIME_LIMIT)
     )
     
     return Optim.minimizer(res), res

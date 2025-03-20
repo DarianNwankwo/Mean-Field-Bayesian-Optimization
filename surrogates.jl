@@ -400,6 +400,7 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         d, λ = coefficient_solve(KXX, PX, y)
         s.d[1:N] = d
         s.λ[1:length(ϕ)] = λ
+        s.y[1:N] = y
         s.observed = length(y)
     end
 end

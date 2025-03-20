@@ -25,5 +25,7 @@ We employ a constructor that preallocates our linear systems, however, we need t
 basis functions after this. Setting the kernel assumes the covariates and observations are already known, whereas
 setting the polynomial basis functions does not. This may produce an error if not careful.
 
+<b>Minimizer Shifts of Test Functions under Non-trivial Trends</b>
+
 ## Experimental Setup
 The script will run evaluate a batch of test functions at a time. Now, we need to consider how we'll setup the remaining loops: trials, bo iterations, each surrogate model, and various acquisition functions.

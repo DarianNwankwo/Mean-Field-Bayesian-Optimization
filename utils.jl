@@ -64,7 +64,8 @@ function create_directory_structure(
     function_name,
     function_trends,
     surrogate_trends,
-    filenames)
+    filenames,
+    acquisition_names)
     # Create a mapping to maintain file paths for experimental metrics
     filepath_mappings = Dict(function_name => Dict())
 
@@ -81,19 +82,24 @@ function create_directory_structure(
     for ft in function_trends
         filepath_mappings[function_name][ft] = Dict()
         for st in surrogate_trends
-            filepath_mappings[function_name][ft][st] = filenames
+            filepath_mappings[function_name][ft][st] = Dict()
 
-            # Creates the path for the trend of the function being modeled
-            trend_sub_dir = joinpath(function_name_dir, "$(ft)")
+            for af_name in acquisition_names
+                filepath_mappings[function_name][ft][st][af_name] = filenames
+                # Creates the path for the trend of the function being modeled
+                trend_sub_dir = joinpath(function_name_dir, "$(ft)")
 
-            # Creates the path for the trend of the parametric component of the
-            # hybrid model
-            surrogate_sub_dir = joinpath(trend_sub_dir, "$(st)")
-            if !isdir(surrogate_sub_dir)
-                mkpath(surrogate_sub_dir)
+                # Creates the path for the trend of the parametric component of the hybrid model
+                surrogate_sub_dir = joinpath(trend_sub_dir, "$(st)")
+                
+                # Create the path for the acquisition function being evaluated
+                acquisition_sub_dir = joinpath(surrogate_sub_dir, "$(af_name)")
+                if !isdir(acquisition_sub_dir)
+                    mkpath(acquisition_sub_dir)
+                end
+
+                [touch("$(acquisition_sub_dir)/$(fn)") for fn in filenames]
             end
-
-            [touch("$(surrogate_sub_dir)/$(fn)") for fn in filenames]
         end
     end
 
@@ -202,7 +208,7 @@ function gap(initial_best::T, observed_best::T, actual_best::T) where T <: Real
     return (initial_best - observed_best) / (initial_best - actual_best)
 end
 
-function update_gaps!(gaps::Vector{T}, observations::Vector{T}, actual_best::T; start_index::Int = 1) where T <: Real
+function update_gaps!(gaps::AbstractVector{T}, observations::AbstractVector{T}, actual_best::T; start_index::Int = 1) where T <: Real
     @views begin
         finish_index = length(observations)
         initial_best = minimum(observations[1:start_index])
@@ -217,6 +223,17 @@ end
 
 simple_regret(actual_minimum::T, observation::T) where T <: Real = observation - actual_minimum
 
+function update_simple_regrets!(regrets::AbstractVector{T}, observations::AbstractVector{T}, actual_minimum::T; start_index::Int = 1) where T <: Real
+    @views begin
+        finish_index = length(observations)
+        for (j_reg, j_obs) in enumerate(start_index:finish_index)
+            regrets[j_reg] = simple_regret(actual_minimum, observations[j_obs])
+        end
+    end
+
+    return nothing
+end
+
 function generate_initial_guesses(N::Integer, lbs::Vector{T}, ubs::Vector{T},) where T <: Number
     ϵ = 1e-6
     seq = SobolSeq(lbs, ubs)
@@ -225,6 +242,19 @@ function generate_initial_guesses(N::Integer, lbs::Vector{T}, ubs::Vector{T},) w
     initial_guesses = hcat(initial_guesses, ubs .- ϵ)
 
     return initial_guesses
+end
+
+function get_minimum_observations!(
+    minimum_observations::AbstractVector{T},
+    observations::AbstractVector{T};
+    start::Int) where T <: Real
+    iterations = length(observations) - start
+
+    for i in 1:iterations
+        minimum_observations[i] = minimum(observations[1:start + i])
+    end
+
+    return nothing
 end
 
 function create_csv(filename::String, budget::Int)
@@ -242,6 +272,67 @@ function write_to_csv(filename::String, data::Vector{T}) where T <: Real
     CSV.write(
         filename * ".csv",
         Tables.table(data'),
+        append=true
+    )
+end
+
+function write_gaps_to_disk(path_prefix, gaps::AbstractVector{T}, trial_number::Int) where T <: Real
+    abspath = path_prefix * "gaps.csv"
+    # (TODO): THIS IS NASTY!! FIX LATER!!
+    if trial_number == 1
+        header = ["trial"; string.(1:length(gaps))...]
+        df = DataFrame(-ones(1, length(gaps) + 1), Symbol.(header))
+        # Write the header
+        CSV.write(abspath, df)
+    end
+    CSV.write(
+        abspath,
+        Tables.table([trial_number gaps']),
+        append=true
+    )
+end
+
+function write_observations_to_disk(path_prefix, observations::AbstractVector{T}, trial_number::Int) where T <: Real
+    abspath = path_prefix * "observations.csv"
+    if trial_number == 1
+        header = ["trial"; string.(1:length(observations))...]
+        df = DataFrame(-ones(1, length(observations) + 1), Symbol.(header))
+        # Write the header
+        CSV.write(abspath, df)
+    end
+    CSV.write(
+        abspath,
+        Tables.table([trial_number observations']),
+        append=true
+    )
+end
+
+function write_simple_regrets_to_disk(path_prefix, simple_regrets::AbstractVector{T}, trial_number::Int) where T <: Real
+    abspath = path_prefix * "simple_regrets.csv"
+    if trial_number == 1
+        header = ["trial"; string.(1:length(simple_regrets))...]
+        df = DataFrame(-ones(1, length(simple_regrets) + 1), Symbol.(header))
+        # Write the header
+        CSV.write(abspath, df)
+    end
+    CSV.write(
+        abspath,
+        Tables.table([trial_number simple_regrets']),
+        append=true
+    )
+end
+
+function write_minimum_observations_to_disk(path_prefix, minimum_observations::AbstractVector{T}, trial_number::Int) where T <: Real
+    abspath = path_prefix * "minimum_observations.csv"
+    if trial_number == 1
+        header = ["trial"; string.(1:length(minimum_observations))...]
+        df = DataFrame(-ones(1, length(minimum_observations) + 1), Symbol.(header))
+        # Write the header
+        CSV.write(abspath, df)
+    end
+    CSV.write(
+        abspath,
+        Tables.table([trial_number minimum_observations']),
         append=true
     )
 end

@@ -275,3 +275,9 @@ end
 
 # Custom string method for BasePolicy
 Base.string(bp::AbstractDecisionRule) = bp.name
+
+decision_rule_mapping = Dict(
+    "ei" => EI,
+    "poi" => POI,
+    "lcb" => LCB
+)

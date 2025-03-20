@@ -9,6 +9,9 @@ using SharedArrays
 using Roots
 using FastGaussQuadrature
 using IterTools
+using Tables
+using CSV
+using DataFrames
 
 
 include("constants.jl")
@@ -38,10 +41,10 @@ function bayesian_optimize!(;
 
     # Preallocate the vector xnext for solves of acquisition function
     xnext = zeros(testfn.dim)
-    println("Performing Bayesian Optimization for $budget Iterations")
-    print("Progress: ")
+    # println("Performing Bayesian Optimization for $budget Iterations")
+    # print("Progress: ")
     for i in 1:budget
-        print("|")
+        # print("|")
         multistart_base_solve!(
             surrogate,
             xnext,
@@ -52,7 +55,7 @@ function bayesian_optimize!(;
         )
         ynext = testfn(xnext) + get_observation_noise(surrogate)
         surrogate = condition!(surrogate, xnext, ynext)
-        print("-")
+        # print("-")
         optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
