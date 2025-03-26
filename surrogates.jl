@@ -843,36 +843,6 @@ function optimize!(
     return nothing
 end
 
-# function hyperparameter_solve(
-#     s::Surrogate;
-#     start,
-#     lowerbounds,
-#     upperbounds,
-#     optim_options
-# )
-
-#     function fg!(F, G, θ::Vector{T}) where {T<:Real}
-#         set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
-#         if G !== nothing
-#             G .= -∇log_likelihood(s)
-#         end
-#         if F !== nothing
-#             return -log_likelihood(s)
-#         end
-#     end
-
-#     res = optimize(
-#         Optim.only_fg!(fg!),
-#         lowerbounds,
-#         upperbounds,
-#         start,
-#         Fminbox(LBFGS()),
-#         optim_options
-#     )
-
-#     return (Optim.minimizer(res), Optim.minimum(res))
-# end
-
 function log_likelihood_constructor(s::AbstractSurrogate)
     θ = θ -> begin
         # Note: this updates the given surrogate

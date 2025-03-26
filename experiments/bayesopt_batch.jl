@@ -133,10 +133,10 @@ function main()
     ]
 
     # Create trend.txt metadata and other metric files for each surrogate
-    filenames = ["trend.txt", "gaps.csv", "simple_regrets.csv", "observations.csv", "minimum_observations.csv"]
+    filenames = ["gaps.csv", "simple_regrets.csv", "observations.csv", "minimum_observations.csv"]
     # Each acquisition function will have metrics associated with them
-    acquisition_functions = [EI(), POI(), LCB()]
-    # acquisition_functions = [EI()]
+    # acquisition_functions = [EI(), POI(), LCB()]
+    acquisition_functions = [EI()]
     acquisition_function_names = [string(af) for af in acquisition_functions]
 
     # Create directory to store payload for given test function
@@ -162,15 +162,9 @@ function main()
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
 
-    # Total number of iterations for ProgressMeter
-    NUM_TRENDS = 4
-    NUM_SURROGATES = 4
-    total_iterations = length(testfn_names) * length(acquisition_functions) * NUM_TRENDS * NUM_SURROGATES * cli_args["trials"]
-    progress = ProgressMeter.Progress(total_iterations, dt=1.)
-
     println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
-        println("Test Function Being Evaluated: $testfn_name")
+        # println("Test Function Being Evaluated: $testfn_name")
         # Exract the current test function from the batch of test functions
         payload = testfn_payloads[testfn_name]
         testfn = payload.fn(payload.args...)
@@ -203,30 +197,27 @@ function main()
             af_name = acquisition_function_names[k]
 
             for (i, trend) in enumerate(function_trends)
-                # println("Function Trend Name: $(function_trend_names[i])")
                 # Augment the testfn with a trend
-                tfn = testfn + trend
+                tfn = function_trend_names[i] == "zero_trend" ? testfn : testfn + trend
                 tft_name = function_trend_names[i]
 
-                minimizer_path_prefix = "$current_directory/data/$testfn_name/"
+                minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
                 write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
 
                 for (j, surrogate) in enumerate(surrogates)
-                    # println("Surrogate Name: $(surrogate_trend_names[j])")
                     set_decision_rule!(surrogate, af)
                     st_name = surrogate_trend_names[j]
 
-                    # println("Beginning Several Trials for $(testfn_name) Test Function [$name]")
                     # Extract minimizer from testfunction
                     actual_minimum = tfn(tfn.xopt[1])
                     num_initial_observations = ios[j]
 
                     # Construct path to directory maintaining current experiments data
                     path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$af_name/"
-                    # write_trend_to_disk(path_prefix)
 
+                    println("Beginning Randomized Trials: ")
                     for trial in 1:cli_args["trials"]
-                        # println("Trial #$trial")
+                        print("|")
                         
                         # Gather initial design for our statistical model
                         Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
@@ -261,11 +252,11 @@ function main()
                         write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
                         write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
 
-                        ProgressMeter.next!(progress)
+                        # ProgressMeter.next!(progress)
                     end
+                    flush(stdout)
                 end
             end
-            println()
         end
     end
 end

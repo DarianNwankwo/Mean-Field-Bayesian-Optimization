@@ -359,7 +359,7 @@ end
 
 function TestStyblinskiTang(d)
     f(x) = 0.5*sum(x.^4 - 16*x.^2 + 5*x)
-    ∇f(x) = 2*x.^3 - 16*x + 2.5
+    ∇f(x) = 2*x.^3 - 16*x .+ 2.5
     bounds = zeros(d, 2)
     bounds[:,1] .= -5.0
     bounds[:,2] .=  5.0

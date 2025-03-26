@@ -12,6 +12,7 @@ using IterTools
 using Tables
 using CSV
 using DataFrames
+using Base.Threads
 
 
 include("constants.jl")
@@ -45,7 +46,7 @@ function bayesian_optimize!(;
     # print("Progress: ")
     for i in 1:budget
         # print("|")
-        multistart_base_solve!(
+        multistart_base_solve_threaded!(
             surrogate,
             xnext,
             spatial_lbs=spatial_lbs,
@@ -55,7 +56,6 @@ function bayesian_optimize!(;
         )
         ynext = testfn(xnext) + get_observation_noise(surrogate)
         surrogate = condition!(surrogate, xnext, ynext)
-        # print("-")
         optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
@@ -64,6 +64,7 @@ function bayesian_optimize!(;
         )
 
     end
+    # println()
 
     return surrogate
 end

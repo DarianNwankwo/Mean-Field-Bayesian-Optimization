@@ -103,9 +103,6 @@ function create_directory_structure(
         end
     end
 
-    # Create global_minimizer.txt file for <function_name>'s global minimizer
-    touch("$(function_name_dir)/global_minimizer.txt")
-
     return filepath_mappings
 end
 
@@ -143,12 +140,6 @@ function get_trends(bias, dim)
         PolynomialBasisFunction([x -> bias, x -> dot(x, x)])
     ]
 
-    # coefficients = [
-    #     [1.],
-    #     [1.],
-    #     ones(dim),
-    #     ones(dim + 1)
-    # ]
     coefficients = [ones(length(pbf)) for pbf in surrogate_trends]
 
     initial_observation_sizes = [1, 1, dim, dim + 1]
@@ -199,12 +190,6 @@ function randsample(N, d, lbs, ubs)
     return X
 end
 
-
-function stdize(series; a=0, b=1)
-    smax, smin = maximum(series), minimum(series)
-    return [a + (s - smin) / (smax - smin) * (b - a) for s in series]
-end
-
 function gap(initial_best::T, observed_best::T, actual_best::T) where T <: Real
     return (initial_best - observed_best) / (initial_best - actual_best)
 end
@@ -216,6 +201,9 @@ function update_gaps!(gaps::AbstractVector{T}, observations::AbstractVector{T}, 
 
         for (j, end_index) in enumerate(start_index:finish_index)
             gaps[j] = gap(initial_best, minimum(observations[1:end_index]), actual_best)
+            # if gaps[j] > 1
+            #     println("Initial Best: $initial_best\nActual Best: $actual_best\nObserved Best: $(minimum(observations[1:end_index]))")
+            # end
         end
     end
     
@@ -349,4 +337,11 @@ function write_global_minimizer_to_disk(path_prefix, testfn::TestFunction)
         write(file, "Minimizer: $(string(f_minimizer))\n")
         write(file, "Minimum: $(f_minimum)\n")
     end
+end
+
+function to(n; key="MB")
+    mapping = Dict("KB" => 1, "MB" => 2, "GB" => 3)
+    factor = mapping[key]
+    conversion = n / (1024 ^ mapping[key])
+    return "$(conversion)$(key)"
 end
