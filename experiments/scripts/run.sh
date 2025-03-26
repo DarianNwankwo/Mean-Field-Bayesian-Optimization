@@ -1,71 +1,48 @@
+#!/bin/bash
+
 # Experimental configuration
 RANDOM_SEED=1906
-RANDOM_RESTARTS=64
-NUMBER_OF_TRIALS=50
+RANDOM_RESTARTS=256
+NUMBER_OF_TRIALS=60
 BAYESIAN_OPTIMIZATION_LOOP_BUDGET=200
 SHOULD_OPTIMIZE=1
 
-# Test functions to perform Bayesian Optimization on
+# Array of test function names
 function_names=(
-  "gramacylee"
-  "rastrigin1d"
   "rastrigin4d"
-  "ackley1d"
   "ackley2d"
-  "ackley3d"
-  "ackley4d"
-  "ackley5d"
   "ackley8d"
-  "ackley10d"
-  "ackley16d"
   "rosenbrock"
   "sixhump"
   "braninhoo"
-  "hartmann3d"
   "goldsteinprice"
-  "beale"
-  "easom"
-  "styblinskitang1d"
-  "styblinskitang2d"
-  "styblinskitang3d"
-  "styblinskitang4d"
   "styblinskitang10d"
-  "bukinn6"
-  "crossintray"
-  "eggholder"
-  "holdertable"
-  "schwefel1d"
-  "schwefel2d"
-  "schwefel3d"
   "schwefel4d"
-  "schwefel10d"
-  "levyn13"
-  "trid1d"
-  "trid2d"
-  "trid3d"
   "trid4d"
-  "trid10d"
   "mccormick"
-  "hartmann4d"
   "hartmann6d"
-  "bohachevsky"
   "griewank3d"
   "shekel4d"
-  "dropwave"
-  "griewank1d"
-  "griewank2d"
   "levy10d"
 )
 
-IFS=','
-function_names_joined="${function_names[*]}"
-unset IFS
+echo "Timing single call with all functions..."
+start=$(date +%s.%N)
 
-if [ $SHOULD_OPTIMIZE -eq 1 ]; then
-  julia ../bayesopt_batch.jl --function-name $function_names_joined --seed $RANDOM_SEED \
-    --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET \
-    --optimize
-else
-  julia ../bayesopt_batch.jl --function-name $function_names_joined --seed $RANDOM_SEED \
-    --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET
-fi
+# Loop over each function name and execute the CLI script in the background
+for fn in "${function_names[@]}"; do
+  if [ $SHOULD_OPTIMIZE -eq 1 ]; then
+    julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
+      --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET \
+      --optimize &
+  else
+    julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
+      --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET &
+  fi
+done
+
+wait
+
+end=$(date +%s.%N)
+elapsed=$(echo "$end - $start" | bc)
+echo "Total time for background single call: $elapsed seconds\n" > timing.txt
