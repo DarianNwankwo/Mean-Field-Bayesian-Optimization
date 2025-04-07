@@ -896,55 +896,8 @@ function log_likelihood_constructor(s::AbstractSurrogate)
     return (θ, ∇θ)
 end
 
-function projected_gradient_descent(f, g, x0;
-    lower=[-1.0],
-    upper=[1.0],
-    maxiter=50,
-    tol=1e-8,
-    α=0.1)
-    # Project x onto [lower, upper]
-    clamp_in_bounds(x) = clamp(x, lower, upper)
 
-    x = clamp_in_bounds(x0)
-    for iter in 1:maxiter
-        grad = g(x)
-
-        # Check for convergence based on small gradient
-        if norm(grad) < tol
-            # println("Converged at iteration $iter")
-            return x
-        end
-
-        # Take a gradient step
-        x_proposed = x - α * grad
-        # Project the result back into the feasible region
-        x_new = clamp_in_bounds(x_proposed)
-
-        # If the update is tiny, consider it converged
-        if norm(x_new - x) < tol
-            # println("Converged at iteration $iter (step size small)")
-            return x_new
-        end
-
-        x = x_new
-    end
-
-    # println("Warning: Reached maxiter = $maxiter without convergence")
-    return x
-end
-
-function hyperparameter_solve(
-    s::AbstractSurrogate;
-    start,
-    lowerbounds,
-    upperbounds)
-    f, g = log_likelihood_constructor(s)
-    minimizer = projected_gradient_descent(f, g, start; lower=lowerbounds, upper=upperbounds)
-
-    return (minimizer, f(minimizer))
-end
-
-function optimize2!(
+function optimize!(
     s::AbstractSurrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},

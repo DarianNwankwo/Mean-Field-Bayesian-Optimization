@@ -130,12 +130,16 @@ struct PreallocatedContainers
     px
     ∇px
     Hpx
+    KxX
+    ∇KxX
 end
 
 function PreallocatedContainers(pbf::PolynomialBasisFunction, dim::Int)
     return PreallocatedContainers(
         zeros(1, length(pbf.basis_functions)),
         zeros(dim, length(pbf.basis_functions)),
-        zeros(dim, dim, 1, length(pbf.basis_functions))
+        zeros(dim, dim, 1, length(pbf.basis_functions)),
+        nothing,
+        nothing
     )
 end

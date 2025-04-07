@@ -67,7 +67,7 @@ function bayesian_optimize!(
         ynext = testfn(xnext) + get_observation_noise(surrogate)
         surrogate = condition!(surrogate, xnext, ynext)
         # print("-")
-        optimize2!(
+        optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
             upperbounds=kernel_ubs,
