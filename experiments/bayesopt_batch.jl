@@ -180,17 +180,17 @@ function main()
         ios = initial_observation_sizes
         surrogates = [
             Surrogate(
-                Matern52(), dim=testfn.dim, capacity=cli_args["budget"] + ios[1], observation_noise=cli_args["observation-noise"]
+                Matern52(), testfn.dim, cli_args["budget"] + ios[1], EI(), cli_args["observation-noise"]
             ),
-            HybridSurrogate(
-                Matern52(), surrogate_trends[2], dim=testfn.dim, capacity=cli_args["budget"] + ios[2], observation_noise=cli_args["observation-noise"]
-            ),
-            HybridSurrogate(
-                Matern52(), surrogate_trends[3], dim=testfn.dim, capacity=cli_args["budget"] + ios[3], observation_noise=cli_args["observation-noise"]
-            ),
-            HybridSurrogate(
-                Matern52(), surrogate_trends[4], dim=testfn.dim, capacity=cli_args["budget"] + ios[4], observation_noise=cli_args["observation-noise"]
-            )
+            # HybridSurrogate(
+            #     Matern52(), surrogate_trends[2], testfn.dim, cli_args["budget"] + ios[2], EI(), cli_args["observation-noise"]
+            # ),
+            # HybridSurrogate(
+            #     Matern52(), surrogate_trends[3], testfn.dim, cli_args["budget"] + ios[3], EI(), cli_args["observation-noise"]
+            # ),
+            # HybridSurrogate(
+            #     Matern52(), surrogate_trends[4], testfn.dim, cli_args["budget"] + ios[4], EI(), cli_args["observation-noise"]
+            # )
         ]
 
         for (k, af) in enumerate(acquisition_functions)
@@ -217,7 +217,6 @@ function main()
 
                     println("Beginning Randomized Trials: ")
                     for trial in 1:cli_args["trials"]
-                        print("|")
                         
                         # Gather initial design for our statistical model
                         Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
@@ -228,16 +227,16 @@ function main()
 
                         # Perform Bayesian optimization loop
                         surrogate = bayesian_optimize!(
-                            surrogate=surrogate,
-                            testfn=tfn,
-                            spatial_lbs=spatial_lbs,
-                            spatial_ubs=spatial_ubs,
-                            kernel_lbs=kernel_lbs,
-                            kernel_ubs=kernel_ubs,
-                            decision_rule_hyperparameters=decision_rule_hyperparameters,
-                            inner_optimizer_starts=inner_optimizer_starts,
-                            hyperparameter_optimizer_starts=hyperparameter_optimizer_starts,
-                            budget=cli_args["budget"]
+                            surrogate,
+                            tfn,
+                            spatial_lbs,
+                            spatial_ubs,
+                            kernel_lbs,
+                            kernel_ubs,
+                            decision_rule_hyperparameters,
+                            inner_optimizer_starts,
+                            hyperparameter_optimizer_starts,
+                            cli_args["budget"]
                         )
 
                         # Extract performance metrics

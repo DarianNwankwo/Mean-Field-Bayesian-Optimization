@@ -38,7 +38,8 @@ mutable struct HybridSurrogate{RBF<:StationaryKernel,PBF<:ParametricRepresentati
     X::Matrix{Float64} # Covariates
     P::Matrix{Float64} # Parametric term design matrix
     K::Matrix{Float64} # Covariance matrix for Gaussian process
-    L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
+    # L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
+    L::Matrix{Float64}
     y::Vector{Float64}
     d::Vector{Float64} # Coefficients for Gaussian process
     λ::Vector{Float64} # Coefficients for parametric/trend term
@@ -46,6 +47,7 @@ mutable struct HybridSurrogate{RBF<:StationaryKernel,PBF<:ParametricRepresentati
     g::DecisionRule
     observed::Int
     capacity::Int
+    containers::PreallocatedContainers
 end
 
 get_parametric_basis_matrix(as::HybridSurrogate) = as.P
@@ -58,6 +60,7 @@ mutable struct Surrogate{RBF<:StationaryKernel} <: AbstractSurrogate
     X::Matrix{Float64}
     K::Matrix{Float64}
     L::LowerTriangular{Float64,Matrix{Float64}}
+    # L::Matrix{Float64}
     y::Vector{Float64}
     d::Vector{Float64}
     observation_noise::Float64
@@ -136,18 +139,18 @@ function HybridSurrogate(
     ψ::RadialBasisFunction,
     ϕ::PolynomialBasisFunction,
     X::Matrix{T},
-    y::Vector{T};
+    y::Vector{T},
     capacity::Int=DEFAULT_CAPACITY,
     decision_rule::AbstractDecisionRule=EI(),
     observation_noise::T=1e-6) where {T<:Real}
     @assert length(y) <= capacity "Capacity must be >= number of observations."
-    d, N = size(X)
+    dim, N = size(X)
 
     """
     Preallocate a matrix for covariates of size d x capacity where capacity is the maximum
     number of observations.
     """
-    preallocated_X = zeros(d, capacity)
+    preallocated_X = zeros(dim, capacity)
     preallocated_X[:, 1:N] = X
 
     """
@@ -155,8 +158,10 @@ function HybridSurrogate(
     our observations of size capacity x m where m is the dimensionality of our basis vector.
     """
     preallocated_P = zeros(capacity, length(ϕ))
-    PX = eval_basis(ϕ, X)
-    preallocated_P[1:N, 1:length(ϕ)] = PX
+    # PX = eval_basis(ϕ, X)
+    eval_basis!(ϕ, X, (@view preallocated_P[1:N, 1:length(ϕ)]))
+    PX = preallocated_P[1:N, 1:length(ϕ)]
+    # preallocated_P[1:N, 1:length(ϕ)] = PX
 
     """
     Preallocate a covariance matrix of size d x capacity
@@ -169,6 +174,7 @@ function HybridSurrogate(
     Preallocate a matrix for the cholesky factorization of size d x capacity
     """
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
+    # preallocated_L = zeros(capacity, capacity)
     preallocated_L[1:N, 1:N] = cholesky(
         Hermitian(
             preallocated_K[1:N, 1:N]
@@ -192,6 +198,8 @@ function HybridSurrogate(
 
     observed = length(y)
 
+    containers = PreallocatedContainers(ϕ, dim)
+
     return HybridSurrogate(
         ψ,
         ϕ,
@@ -205,14 +213,15 @@ function HybridSurrogate(
         observation_noise,
         decision_rule,
         observed,
-        capacity
+        capacity,
+        containers
     )
 end
 
 # Constructor that expects observations and covariates later
 function HybridSurrogate(
     ψ::RadialBasisFunction,
-    ϕ::PolynomialBasisFunction;
+    ϕ::PolynomialBasisFunction,
     dim::Int,
     capacity::Int=DEFAULT_CAPACITY,
     decision_rule::AbstractDecisionRule=EI(),
@@ -221,10 +230,12 @@ function HybridSurrogate(
     preallocated_P = zeros(capacity, length(ϕ))
     preallocated_K = zeros(capacity, capacity)
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
+    # preallocated_L = zeros(capacity, capacity)
     preallocated_d = zeros(capacity)
     λ_polynomial = zeros(length(ϕ))
     preallocated_y = zeros(capacity)
     observed = 0
+    containers = PreallocatedContainers(ϕ, dim)
 
     return HybridSurrogate(
         ψ,
@@ -239,14 +250,15 @@ function HybridSurrogate(
         observation_noise,
         decision_rule,
         observed,
-        capacity
+        capacity,
+        containers
     )
 end
 
 function Surrogate(
     ψ::RadialBasisFunction,
     X::Matrix{T},
-    y::Vector{T};
+    y::Vector{T},
     capacity::Int=DEFAULT_CAPACITY,
     decision_rule::AbstractDecisionRule=EI(),
     observation_noise::T=1e-6) where {T<:Real}
@@ -260,11 +272,14 @@ function Surrogate(
     preallocated_K[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
 
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
-    preallocated_L[1:N, 1:N] = cholesky(
-        Hermitian(
-            preallocated_K[1:N, 1:N]
-        )
-    ).L
+    # preallocated_L = zeros(capacity, capacity)
+    preallocated_L[1:N, 1:N] = LowerTriangular(
+        cholesky(
+            Hermitian(
+                preallocated_K[1:N, 1:N]
+            )
+        ).L
+    )
 
     preallocated_d = zeros(capacity)
     preallocated_d[1:N] = preallocated_L[1:N, 1:N]' \ (preallocated_L[1:N, 1:N] \ y)
@@ -287,7 +302,7 @@ function Surrogate(
 end
 
 function Surrogate(
-    ψ::RadialBasisFunction;
+    ψ::RadialBasisFunction,
     dim::Int,
     capacity::Int=DEFAULT_CAPACITY,
     decision_rule::AbstractDecisionRule=EI(),
@@ -295,6 +310,7 @@ function Surrogate(
     preallocated_X = zeros(dim, capacity)
     preallocated_K = zeros(capacity, capacity)
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
+    # preallocated_L = zeros(capacity, capacity)
     preallocated_d = zeros(capacity)
     preallocated_y = zeros(capacity)
 
@@ -327,6 +343,9 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
                 Hermitian(s.K[1:N, 1:N])
             ).L
         )
+        # s.L[1:N, 1:N] .= cholesky(
+        #     Hermitian(s.K[1:N, 1:N])
+        # ).L
         s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
     end
 end
@@ -342,6 +361,9 @@ function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
                 Hermitian(s.K[1:N, 1:N])
             ).L
         )
+        # s.L[1:N, 1:N] = cholesky(
+        #     Hermitian(s.K[1:N, 1:N])
+        # ).L
         d, λ = coefficient_solve(
             get_active_covariance(s),
             get_active_parametric_basis_matrix(s),
@@ -360,7 +382,7 @@ set_parametric_component!(s::Surrogate, pbf::PolynomialBasisFunction) = nothing
 
 function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
     @views begin
-        d, N = size(X)
+        dim, N = size(X)
 
         s.X[:, 1:N] = X
         observation_noise = get_observation_noise(s)
@@ -381,7 +403,7 @@ end
 
 function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
     @views begin
-        d, N = size(X)
+        dim, N = size(X)
 
         s.X[:, 1:N] = X
         observation_noise = get_observation_noise(s)
@@ -395,7 +417,8 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
             ).L
         )
         ϕ = get_parametric_basis_function(s)
-        PX = eval_basis(ϕ, X)
+        eval_basis!(ϕ, X, s.P[1:N, 1:length(ϕ)])
+        PX = s.P[1:N, 1:length(ϕ)]
         s.P[1:N, 1:length(ϕ)] = PX
         d, λ = coefficient_solve(KXX, PX, y)
         s.d[1:N] = d
@@ -412,9 +435,9 @@ function resize(s::HybridSurrogate)
         get_parametric_basis_function(s),
         get_covariates(s),
         get_observations(s),
-        capacity=get_capacity(s) * DOUBLE,
-        decision_rule=get_decision_rule(s),
-        observation_noise=get_observation_noise(s)
+        get_capacity(s) * DOUBLE,
+        get_decision_rule(s),
+        get_observation_noise(s)
     )
 end
 
@@ -424,8 +447,9 @@ function resize(s::Surrogate)
         get_kernel(s),
         get_covariates(s),
         get_observations(s),
-        capacity=get_capacity(s) * DOUBLE,
-        decision_rule=get_decision_rule(s)
+        get_capacity(s) * DOUBLE,
+        get_decision_rule(s),
+        get_observation_noise(s)
     )
 end
 
@@ -495,7 +519,12 @@ function update_parametric_design_matrix!(s::HybridSurrogate)
     @views begin
         update_index = get_observed(s)
         new_x = get_covariates(s)[:, update_index]
-        s.P[update_index, :] = eval_basis(get_parametric_basis_function(s), new_x)
+        # s.P[update_index, :] = eval_basis(get_parametric_basis_function(s), new_x)
+        eval_basis!(
+            get_parametric_basis_function(s),
+            new_x,
+            s.P[update_index:update_index, :]
+        )
     end
 end
 
@@ -553,8 +582,14 @@ function eval(
 
         sx.kx = () -> eval_KxX(kernel, x, X)
         sx.∇kx = () -> eval_∇KxX(kernel, x, X)
-        sx.px = () -> eval_basis(parametric_basis, x)
-        sx.∇px = () -> eval_∇basis(parametric_basis, x)
+        sx.px = function () 
+            eval_basis!(parametric_basis, x, s.containers.px)
+            return s.containers.px
+        end
+        sx.∇px = function ()
+            eval_∇basis!(parametric_basis, x, s.containers.∇px)
+            return s.containers.∇px
+        end
 
         # Predictive mean and its gradient and hessian
         sx.μ = () -> dot(sx.kx, d) + dot(sx.px, λ)
@@ -732,7 +767,10 @@ function eval(
 end
 
 (s::AbstractSurrogate)(x, θ) = eval(s, x, θ)
-eval(sx) = sx.αxθ
+(s::AbstractSurrogate)(x, θ, sx) = eval(s, x, θ, sx)
+function eval(sx::LazyStruct)::Float64
+    return sx.αxθ
+end
 gradient(sx; wrt_hypers=false) = wrt_hypers ? sx.∇αθ : sx.∇αx
 hessian(sx; wrt_hypers=false) = wrt_hypers ? sx.Hαθ : sx.Hαx
 mixed_partials(sx) = sx.d2α_dxdθ
@@ -751,9 +789,9 @@ function log_likelihood(s::HybridSurrogate)
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
 
-    M = [zeros(m, m) P';
-        P K]
-    ladM = first(logabsdet(M))
+    M = Matrix{Float64}([zeros(m, m) P';
+        P K])
+    ladM = log(abs(det(M)))
 
     return -dot(yz, dλ) / 2 - n * log(2π) / 2 - ladM
 end
@@ -820,21 +858,21 @@ function optimize!(
     s::AbstractSurrogate;
     starts::Matrix{T},
     lowerbounds::Vector{T},
-    upperbounds::Vector{T}) where {T<:Real}
-    candidates = []
-
-    for i in 1:size(starts, 2)
-        push!(
-            candidates,
-            hyperparameter_solve(
-                s,
-                start=starts[:, i],
-                lowerbounds=lowerbounds,
-                upperbounds=upperbounds
-            )
+    upperbounds::Vector{T},
+    minimizers_container::Vector{Vector{T}},
+    minimums_container::Vector{T}) where {T<:Real}
+    M = size(starts, 2)
+    
+    for i in 1:M
+        minimizers_container[i], minimums_container[i] = hyperparameter_solve(
+            s,
+            start=starts[:, i],
+            lowerbounds=lowerbounds,
+            upperbounds=upperbounds
         )
     end
 
+    candidates = [(minimizers_container[i], minimums_container[i]) for i in 1:M]
     candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
     mini, j_mini = findmin(pair -> pair[2], candidates)
     θ = candidates[j_mini][1]
@@ -904,6 +942,50 @@ function hyperparameter_solve(
     minimizer = projected_gradient_descent(f, g, start; lower=lowerbounds, upper=upperbounds)
 
     return (minimizer, f(minimizer))
+end
+
+function optimize2!(
+    s::AbstractSurrogate;
+    lowerbounds::Vector{T},
+    upperbounds::Vector{T},
+    starts::Matrix{T},
+    minimizers_container::Vector{Vector{T}},
+    minimums_container::Vector{T},
+    optim_options = Optim.Options(
+        outer_iterations=100,
+        x_tol=1e-3,
+        f_tol=1e-3,
+        time_limit=NEWTON_SOLVE_TIME_LIMIT
+    )) where T <: Real
+
+    function fg!(F, G, θ::Vector{T}) where T <: Real
+        set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
+        if G !== nothing G .= -∇log_likelihood(s) end
+        if F !== nothing return -log_likelihood(s) end
+    end
+
+    M = size(starts, 2)
+    for i in 1:M
+        res = optimize(
+            Optim.only_fg!(fg!),
+            lowerbounds,
+            upperbounds,
+            starts[:, i],
+            Fminbox(LBFGS()),
+            optim_options
+        )
+        minimizers_container[i] = Optim.minimizer(res)
+        minimums_container[i] = Optim.minimum(res)
+    end
+
+    candidates = [(minimizers_container[i], minimums_container[i]) for i in 1:M]
+    candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
+    mini, j_mini = findmin(pair -> pair[2], candidates)
+    # println("Candidate: $(candidates[j_mini])")
+    θ = candidates[j_mini][1]
+    set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
+
+    return nothing
 end
 
 Distributions.mean(sx) = sx.μ

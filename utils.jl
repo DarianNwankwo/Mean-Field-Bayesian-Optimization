@@ -134,17 +134,25 @@ end
 
 function get_trends(bias, dim)
     surrogate_trends = [
-        PolynomialBasisFunction([x -> 0.]),
-        PolynomialBasisFunction([x -> bias]),
-        PolynomialBasisFunction([x -> x[i] for i in 1:dim]),
-        PolynomialBasisFunction([x -> bias, x -> dot(x, x)])
+        PolynomialBasisFunction(Tuple(
+            [x -> 0.]
+        )),
+        PolynomialBasisFunction(Tuple(
+            [x -> bias]
+        )),
+        PolynomialBasisFunction(Tuple(
+            [x -> x[i] for i in 1:dim]
+        )),
+        PolynomialBasisFunction(Tuple(
+            [x -> bias, x -> dot(x, x)]
+        ))
     ]
 
     coefficients = [ones(length(pbf)) for pbf in surrogate_trends]
 
     initial_observation_sizes = [1, 1, dim, dim + 1]
 
-    function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i]) for i in 1:length(coefficients)]
+    function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i], dim) for i in 1:length(coefficients)]
 
     return surrogate_trends, function_trends, initial_observation_sizes
 end

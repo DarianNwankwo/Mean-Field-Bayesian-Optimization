@@ -154,7 +154,7 @@ A `DecisionRule` object representing the Expected Improvement acquisition functi
 - If the standard deviation \( σ(x) \) is very small, the EI is effectively zero, as no significant 
   improvement is expected.
 """
-function EI(; σtol=1e-8)
+function EI(σtol=1e-8)
     function ei(μ, σ, θ, sx)
         if σ < σtol
             return 0.
@@ -216,7 +216,7 @@ A `DecisionRule` object representing the Probability of Improvement acquisition 
 - If the standard deviation \( σ(x) \) is too small (indicating high confidence), no exploration is 
   encouraged, and the POI is zero.
 """
-function POI(; σtol=1e-8)
+function POI(σtol=1e-8)
     function poi(μ, σ, θ, sx)
         if σ < σtol
             return 0.0

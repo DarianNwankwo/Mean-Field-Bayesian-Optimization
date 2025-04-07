@@ -2,16 +2,16 @@ import Base:+, *, -
 # https://www.sfu.ca/~ssurjano/optimization.html
 # https://en.wikipedia.org/wiki/Test_functions_for_optimization
 
-struct TestFunction
+struct TestFunction{F, G}
     dim::Int
     bounds
     xopt
-    f
-    ∇f
+    f::F
+    ∇f::G
 end
 
 
-(testfn::TestFunction)(x::Vector{T}) where T <: Real = testfn.f(x)
+(testfn::TestFunction)(x::AbstractVector{T}) where T <: Real = testfn.f(x)::Float64
 gradient(testfn::TestFunction) = testfn.∇f
 
 # Apply the function or its gradient to each column of the matrix
@@ -19,15 +19,13 @@ function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T <: Real
     N = size(X, 2)
     y = zeros(N)
 
-    for i in 1:N
-        y[i] = testfn(X[:, i])
+    @views begin
+        for i in 1:N
+            y[i] = testfn(X[:, i])
+        end
     end
 
     return y
-    # return map(
-    #     !grad ? testfn.f : testfn.∇f,
-    #     eachcol(X)
-    # )
 end
 
 
@@ -191,21 +189,51 @@ end
 function TestAckley(d; a=20.0, b=0.2, c=2π)
     
     function f(x)
-        nx = norm(x)
-        cx = sum(cos.(c*x))
-        -a*exp(-b/sqrt(d)*nx) - exp(cx/d) + a + exp(1)
+        cx = 0.0
+        @inbounds @simd for i in eachindex(x)
+            cx += cos(c * x[i])
+        end
+        nx = sqrt(sum(@inbounds x[i]^2 for i in eachindex(x)))
+        return -a * exp(-b / sqrt(d) * nx) - exp(cx / d) + a + exp(1)
     end
     
-    function ∇f(x)
+    # function ∇f(x)
+    #     nx = norm(x)
+    #     if nx == 0.0
+    #         return zeros(d)
+    #     else
+    #         cx = sum(cos.(c*x))
+    #         dnx = x/nx
+    #         dcx = -c*sin.(c*x)
+    #         (a*b)/sqrt(d)*exp(-b/sqrt(d)*norm(x))*dnx - exp(cx/d)/d*dcx
+    #     end
+    # end
+    function ∇f!(grad, x)
         nx = norm(x)
         if nx == 0.0
-            return zeros(d)
-        else
-            cx = sum(cos.(c*x))
-            dnx = x/nx
-            dcx = -c*sin.(c*x)
-            (a*b)/sqrt(d)*exp(-b/sqrt(d)*norm(x))*dnx - exp(cx/d)/d*dcx
+            return zeros(eltype(x), length(x))
         end
+    
+        # Compute the sum of cos(c*x) without allocating an array.
+        cx = 0.0
+        for xi in x
+            cx += cos(c * xi)
+        end
+    
+        # Precompute scalar factors; note we reuse nx (computed once) here.
+        factor1 = (a * b) / sqrt(d) * exp(-b / sqrt(d) * nx)
+        factor2 = exp(cx / d) / d
+    
+        # Compute the gradient in one loop, combining the normalization and sine evaluation.
+        for i in eachindex(x)
+            # Instead of forming dnx and dcx as separate arrays, we compute
+            # grad[i] directly as:
+            #   factor1 * (x[i] / nx) - factor2 * (-c*sin(c*x[i]))
+            # which simplifies to:
+            grad[i] = factor1 * (x[i] / nx) + factor2 * c * sin(c * x[i])
+        end
+    
+        return grad
     end
 
     bounds = zeros(d,2)
@@ -213,7 +241,7 @@ function TestAckley(d; a=20.0, b=0.2, c=2π)
     bounds[:,2] .=  32.768
     xopt = (zeros(d),)
 
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 

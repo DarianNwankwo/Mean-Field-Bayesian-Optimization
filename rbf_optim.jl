@@ -29,8 +29,8 @@ function base_solve(
             x_tol=1e-3,
             f_tol=1e-3,
             time_limit=NEWTON_SOLVE_TIME_LIMIT,
-            outer_iterations=20,
-            iterations=20,
+            outer_iterations=100,
+            # iterations=20,
         )
     )
     
@@ -56,26 +56,30 @@ function line_search(f, x, p, g, lower, upper; α0=1.0, ρ=0.5, c=1e-4)
 end
 
 # Projected Newton method for minimizing f subject to box constraints.
-function projected_newton(f, grad, hess, x0, lower, upper; tol=1e-3, max_iter=100)
+function projected_newton!(f, grad, hess, x0, lower, upper; tol=1e-3, max_iter=100)
     x = project(x0, lower, upper)
+    H = zeros(length(x), length(x))
+    g = zeros(length(x))
+    p = zeros(length(x))
+
     for iter = 1:max_iter
-        g = grad(x)
-        H = hess(x)
+        g[:] = grad(x)
+        H[:] = hess(x)
         
         # Solve H * p = -g, but if the Hessian is nearly singular or not PD,
         # fall back to the gradient direction.
         try
-            p = -H \ g
+            p[:] = -H \ g
         catch
-            p = -g
+            p[:] = -g
         end
 
         # Check if the computed step is a descent direction
         if dot(g, p) > 0
-            p = -g
+            p[:] = -g
         end
         
-        p = vec(p)
+        # p[:] = vec(p)
         # Determine a suitable step length
         α = line_search(f, x, p, g, lower, upper)
         
@@ -87,7 +91,7 @@ function projected_newton(f, grad, hess, x0, lower, upper; tol=1e-3, max_iter=10
             return x_new, f(x_new) #iter
         end
         
-        x = x_new
+        x[:] = x_new
     end
     return x, f(x) # max_iter
 end
@@ -103,7 +107,7 @@ function base_solve_alt(
     grad(x) = -gradient(surrogate(x, θfixed))
     hess(x) = -hessian(surrogate(x, θfixed))
 
-    minimizer, f_minimum = projected_newton(fun, grad, hess, xstart, spatial_lbs, spatial_ubs)
+    minimizer, f_minimum = projected_newton!(fun, grad, hess, xstart, spatial_lbs, spatial_ubs)
     
     return minimizer, f_minimum
 end
@@ -114,38 +118,36 @@ function multistart_base_solve!(
     spatial_lbs::Vector{T},
     spatial_ubs::Vector{T},
     guesses::Matrix{T},
-    θfixed::Vector{T}) where T <: Real
+    θfixed::Vector{T},
+    minimizers_container::Vector{Vector{T}},
+    minimums_container::Vector{T}) where T <: Real
     if get_name(get_decision_rule(surrogate)) == "Random"
         xfinal[:] = spatial_lbs .+ (spatial_ubs .- spatial_lbs) .* rand(length(spatial_lbs))
         return nothing
     end
     candidates = []
+    M = size(guesses, 2)
+    xi = zeros(length(xfinal))
     
     for i in 1:size(guesses, 2)
         # print("$i-")
-        xi = guesses[:, i]
+        xi[:] = guesses[:, i]
 
-        # minimizer, res = base_solve(
-        #     surrogate,
-        #     spatial_lbs=spatial_lbs,
-        #     spatial_ubs=spatial_ubs,
-        #     xstart=xi,
-        #     θfixed=θfixed
-        # )
-        # push!(candidates, (minimizer, minimum(res)))
-        minimizer, f_minimum = base_solve_alt(
+        minimizer, res = base_solve(
             surrogate,
             spatial_lbs=spatial_lbs,
             spatial_ubs=spatial_ubs,
             xstart=xi,
             θfixed=θfixed
         )
-        push!(candidates, (minimizer, f_minimum))
+        minimizers_container[i] = minimizer
+        minimums_container[i] = minimum(res)
     end
     
+    candidates = [(minimizers_container[i], minimums_container[i]) for i in 1:M]
     candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
     mini, j_mini = findmin(pair -> pair[2], candidates)
-    xfinal .= candidates[j_mini][1]
+    xfinal[:] = candidates[j_mini][1]
 
     return nothing
 end

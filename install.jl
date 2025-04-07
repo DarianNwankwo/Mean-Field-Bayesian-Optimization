@@ -12,5 +12,7 @@ Pkg.add([
     "IterTools",
     "Tables",
     "CSV",
-    "DataFrames"
+    "DataFrames",
+    "LinearAlgebra",
+    "BenchmarkTools"
 ])
