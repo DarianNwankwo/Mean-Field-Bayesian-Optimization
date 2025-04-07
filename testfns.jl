@@ -7,7 +7,7 @@ struct TestFunction{F, G}
     bounds
     xopt
     f::F
-    ∇f::G
+    ∇f!::G
 end
 
 
@@ -138,7 +138,10 @@ function TestLevy(d)
         term1 + sum_terms + term3
     end
 
-    ∇f(x) = ForwardDiff.gradient(f, x)
+    ∇f!(G, x) = begin
+        G[:] = ForwardDiff.gradient(f, x)
+        return G
+    end
 
     dim = d
     bounds = zeros(d, 2)
@@ -146,7 +149,7 @@ function TestLevy(d)
     bounds[:, 2] .= 10.
     xopt = (ones(Float64, d),)  # Tuple containing the optimal vector
 
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 function TestBraninHoo(; a=1, b=5.1/(4π^2), c=5/π, r=6, s=10, t=1/(8π))
@@ -155,34 +158,59 @@ function TestBraninHoo(; a=1, b=5.1/(4π^2), c=5/π, r=6, s=10, t=1/(8π))
         y = xy[2]
         a*(y-b*x^2+c*x-r)^2 + s*(1-t)*cos(x) + s
     end
-    function ∇f(xy)
+    function ∇f!(G, xy)
         x = xy[1]
         y = xy[2]
         dx = 2*a*(y-b*x^2+c*x-r)*(-b*2*x+c) - s*(1-t)*sin(x)
         dy = 2*a*(y-b*x^2+c*x-r)
-        [dx, dy]
+        G[1] = dx
+        G[2] = dy
+        return G
     end
     bounds = [-5.0 10.0 ; 0.0 15.0]
     xopt = ([-π, 12.275], [π, 2.275], [9.42478, 2.475])
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestRosenbrock()
     f(xy) = (1-xy[1])^2 + 100*(xy[2]-xy[1]^2)^2
-    ∇f(xy) = [-2*(1-xy[1]) - 400*xy[1]*(xy[2]-xy[1]^2), 200*(xy[2]-xy[1]^2)]
-    return TestFunction(2, [-2.0 2.0 ; -1.0 3.0 ], (ones(2),), f, ∇f)
+    ∇f!(G, xy) = begin
+        G[1] = -2*(1-xy[1]) - 400*xy[1]*(xy[2]-xy[1]^2)
+        G[2] = 200*(xy[2]-xy[1]^2)
+        return G
+    end
+    return TestFunction(2, [-2.0 2.0 ; -1.0 3.0 ], (ones(2),), f, ∇f!)
 end
 
 
 function TestRastrigin(n)
-    f(x) = 10*n + sum(x.^2 - 10*cos.(2π*x))
-    ∇f(x) = 2*x + 20π*sin.(2π*x)
+    # Refactored function evaluation without allocations.
+    f(x) = begin
+        s = 0.0
+        for i in 1:length(x)
+            s += x[i]^2 - 10 * cos(2π * x[i])
+        end
+        return 10*n + s
+    end
+
+    # Refactored in-place gradient evaluation to avoid allocations.
+    ∇f!(G, x) = begin
+        for i in eachindex(x)
+            G[i] = 2*x[i] + 20π*sin(2π * x[i])
+        end
+        return G
+    end
+
+    # Allocate bounds and set each column elementwise.
     bounds = zeros(n, 2)
-    bounds[:,1] .= -5.12
-    bounds[:,2] .=  5.12
+    for i in 1:n
+        bounds[i, 1] = -5.12
+        bounds[i, 2] = 5.12
+    end
+
     xopt = (zeros(n),)
-    return TestFunction(n, bounds, xopt, f, ∇f)
+    return TestFunction(n, bounds, xopt, f, ∇f!)
 end
 
 
@@ -197,21 +225,11 @@ function TestAckley(d; a=20.0, b=0.2, c=2π)
         return -a * exp(-b / sqrt(d) * nx) - exp(cx / d) + a + exp(1)
     end
     
-    # function ∇f(x)
-    #     nx = norm(x)
-    #     if nx == 0.0
-    #         return zeros(d)
-    #     else
-    #         cx = sum(cos.(c*x))
-    #         dnx = x/nx
-    #         dcx = -c*sin.(c*x)
-    #         (a*b)/sqrt(d)*exp(-b/sqrt(d)*norm(x))*dnx - exp(cx/d)/d*dcx
-    #     end
-    # end
     function ∇f!(grad, x)
         nx = norm(x)
         if nx == 0.0
-            return zeros(eltype(x), length(x))
+            grad[:] = 0.
+            return grad
         end
     
         # Compute the sum of cos(c*x) without allocating an array.
@@ -255,29 +273,34 @@ function TestSixHump()
         xterm + x*y + yterm
     end
 
-    function ∇f(xy)
+    function ∇f!(G, xy)
         x = xy[1]
         y = xy[2]
         dxterm = (-4.2*x+4.0*x^3/3)*x^2 + (4.0-2.1*x^2+x^4/3)*2.0*x
         dyterm = (8.0*y)*y^2 + (-4.0+4.0*y^2)*2.0*y
-        [dxterm + y, dyterm + x]
+        G[1] = dxterm + y
+        G[2] = dyterm + x
+        return G
     end
 
     # There's a symmetric optimum
     xopt = ([0.089842, -0.712656], [-0.089842, 0.712656])
 
-    return TestFunction(2, [-3.0 3.0 ; -2.0 2.0], xopt, f, ∇f)
+    return TestFunction(2, [-3.0 3.0 ; -2.0 2.0], xopt, f, ∇f!)
 end
 
 
 function TestGramacyLee()
     f(x) = sin(10π*x[1])/(2*x[1]) + (x[1]-1.0)^4
-    ∇f(x) = [5π*cos(10π*x[1])/x[1] - sin(10π*x[1])/(2*x[1]^2) + 4*(x[1]-1.0)^3]
+    ∇f!(G, x) = begin
+        G[1] = 5π*cos(10π*x[1])/x[1] - sin(10π*x[1])/(2*x[1]^2) + 4*(x[1]-1.0)^3
+        return G
+    end 
     bounds = zeros(1, 2)
     bounds[1,1] = 0.5
     bounds[1,2] = 2.5
     xopt=([0.548563],)
-    return TestFunction(1, bounds, xopt, f, ∇f)
+    return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
 
@@ -296,7 +319,7 @@ function TestGoldsteinPrice()
         return term1 * term2
     end
     
-    function ∇f(xy)
+    function ∇f!(G, xy)
         x1 = xy[1]
         x2 = xy[2]
         t1 = x1 + x2 + 1
@@ -310,7 +333,9 @@ function TestGoldsteinPrice()
         df1 = common1 + common2 * (2 * t3 - 36 * x1 * x2 - 32 * x2 + 48 * t4 + 18 - 32 * x1)
         df2 = common1 + common2 * (48 * x1 - 36 * x1 * x2 - 32 * x2 + 27 * t4 + 18 - 32 * x1)
         
-        return [df1, df2]
+        G[1] = df1
+        G[2] = df2
+        return G
     end
 
     bounds = zeros(2, 2)
@@ -319,7 +344,7 @@ function TestGoldsteinPrice()
 
     xopt = ([0.0, -1.0],)
 
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
@@ -333,7 +358,7 @@ function TestBeale()
         return t1^2 + t2^2 + t3^2
     end
     
-    function ∇f(xy)
+    function ∇f!(G, xy)
         x1 = xy[1]
         x2 = xy[2]
         t1 = 1.5 - x1 + x1 * x2
@@ -342,8 +367,10 @@ function TestBeale()
         
         df1 = 2 * (t1 * (x2 - 1) + t2 * (x2^2 - 1) + t3 * (x2^3 - 1))
         df2 = 2 * (t1 * x1 + 2 * t2 * x1 * x2 + 3 * t3 * x1 * x2^2)
-        
-        return [df1, df2]
+        G[1] = df1
+        G[2] = df2
+
+        return G
     end
 
     bounds = zeros(2, 2)
@@ -352,27 +379,24 @@ function TestBeale()
 
     xopt = ([3.0, 0.5],)
 
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestEasom()
     f(x) = -cos(x[1])*cos(x[2])*exp(-((x[1]-π)^2 + (x[2]-π)^2))
 
-    function ∇f(x)
-        function common_subexpression(x)
-            c = cos(x[1]) * cos(x[2])
-            e = exp(-((x[1] - π)^2 + (x[2] - π)^2))
-            term = 2 * (x[1] - π) * cos(x[2]) + 2 * (x[2] - π) * cos(x[1])
-            return c, e, term
-        end
-
-        c, e, term = common_subexpression(x)
+    function ∇f!(G, x)
+        c = cos(x[1]) * cos(x[2])
+        e = exp(-((x[1] - π)^2 + (x[2] - π)^2))
+        term = 2 * (x[1] - π) * cos(x[2]) + 2 * (x[2] - π) * cos(x[1])
         
         df1 = c * e * term - sin(x[1]) * cos(x[2]) * e
         df2 = c * e * term - sin(x[2]) * cos(x[1]) * e
-        
-        return [df1, df2]
+        G[1] = df1
+        G[2] = df2
+
+        return G
     end
 
     bounds = zeros(2, 2)
@@ -381,18 +405,37 @@ function TestEasom()
     
     xopt=([π, π],)
 
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestStyblinskiTang(d)
-    f(x) = 0.5*sum(x.^4 - 16*x.^2 + 5*x)
-    ∇f(x) = 2*x.^3 - 16*x .+ 2.5
+    # Allocation-free function evaluation
+    f(x) = begin
+        s = 0.0
+        @inbounds for i in eachindex(x)
+            s += x[i]^4 - 16*x[i]^2 + 5*x[i]
+        end
+        return 0.5 * s
+    end
+
+    # Allocation-free in-place gradient evaluation
+    function ∇f!(G, x)
+        @inbounds for i in eachindex(x)
+            G[i] = 2*x[i]^3 - 16*x[i] + 2.5
+        end
+        return G
+    end
+
+    # Set up bounds without extra allocations
     bounds = zeros(d, 2)
-    bounds[:,1] .= -5.0
-    bounds[:,2] .=  5.0
+    for i in 1:d
+        bounds[i, 1] = -5.0
+        bounds[i, 2] = 5.0
+    end
+
     xopt = (repeat([-2.903534], d),)
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 
@@ -406,7 +449,7 @@ function TestBukinN6()
         return term1
     end
     
-    function ∇f(x)
+    function ∇f!(G, x)
         x1 = x[1]
         x2 = x[2]
         t1 = abs(x2 - 0.01 * x1^2)
@@ -414,92 +457,277 @@ function TestBukinN6()
         
         df1 = 0.01 * x1 / t2 + 0.01
         df2 = 50 * (x2 - 0.01 * x1^2) / t2
-        
-        return [df1, df2]
+        G[1] = df1
+        G[2] = df2
+        return G
     end
 
     bounds = zeros(2, 2)
     bounds[:,1] .= -15.0
     bounds[:,2] .=  3.0
     xopt = ([-10.0, 1.0],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
+# function TestCrossInTray()
+#     f(x) = -0.0001 * (abs(sin(x[1]) * sin(x[2]) * exp(abs(100 - sqrt(x[1]^2 + x[2]^2) / π))) + 1)^0.1
+#     ∇f(x) = zeros(2) # TODO
+#     bounds = zeros(2, 2)
+#     bounds[:,1] .= -10.0
+#     bounds[:,2] .=  10.0
+#     xopt = (repeat([1.34941], 2),)
+#     return TestFunction(2, bounds, xopt, f, ∇f)
+# end
+
 function TestCrossInTray()
     f(x) = -0.0001 * (abs(sin(x[1]) * sin(x[2]) * exp(abs(100 - sqrt(x[1]^2 + x[2]^2) / π))) + 1)^0.1
-    ∇f(x) = zeros(2) # TODO
+
+    function ∇f!(G, x)
+        # Extract variables
+        x1 = x[1]
+        x2 = x[2]
+        s1 = sin(x1)
+        s2 = sin(x2)
+        A = s1 * s2
+        dA_dx1 = cos(x1) * s2
+        dA_dx2 = s1 * cos(x2)
+        
+        # Compute the norm and protect against division by zero
+        R = sqrt(x1^2 + x2^2)
+        if R < eps(x1)
+            t1_x = 0.0
+            t1_y = 0.0
+        else
+            Z = 100 - R/π
+            sign_Z = Z > 0 ? 1.0 : (Z < 0 ? -1.0 : 0.0)
+            t1_x = A * sign_Z * (x1/(π * R))
+            t1_y = A * sign_Z * (x2/(π * R))
+        end
+        
+        # Compute B, v, and u
+        Z = 100 - R/π  # recompute to ensure definition
+        sign_Z = Z > 0 ? 1.0 : (Z < 0 ? -1.0 : 0.0)
+        B = exp(abs(Z))
+        v = A * B
+        u = abs(v) + 1.0
+        
+        # sign(v) is the sign of A since B > 0
+        sign_v = A > 0 ? 1.0 : (A < 0 ? -1.0 : 0.0)
+        
+        # Compute the common factor from the chain rule
+        factor = -0.00001 * u^(-0.9) * B * sign_v
+        
+        # Compute the gradient components
+        G[1] = factor * (dA_dx1 - (R < eps(x1) ? 0.0 : t1_x))
+        G[2] = factor * (dA_dx2 - (R < eps(x1) ? 0.0 : t1_y))
+        return G
+    end
+
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .=  10.0
     xopt = (repeat([1.34941], 2),)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestEggHolder()
     f(x) = -(x[2] + 47) * sin(sqrt(abs(x[2] + x[1] / 2 + 47))) - x[1] * sin(sqrt(abs(x[1] - (x[2] + 47))))
-    ∇f(x) = zeros(2) # TODO
+    function ∇f!(G, x)
+        x1 = x[1]
+        x2 = x[2]
+        
+        # Define intermediate expressions
+        A = x2 + 0.5*x1 + 47.0         # A = x[2] + x[1]/2 + 47
+        B = x1 - (x2 + 47.0)           # B = x[1] - (x[2] + 47)
+        
+        absA = abs(A)
+        absB = abs(B)
+        
+        # Compute square roots of absolute values
+        sqrtA = sqrt(absA)
+        sqrtB = sqrt(absB)
+        
+        # Compute factors for the chain rule; protect against division by zero
+        factorA = absA == 0.0 ? 0.0 : cos(sqrtA) / (2 * sqrtA) * sign(A)
+        factorB = absB == 0.0 ? 0.0 : cos(sqrtB) / (2 * sqrtB) * sign(B)
+        
+        # Compute derivative with respect to x1
+        dfdx1_f1 = - (x2 + 47.0) * factorA * 0.5
+        dfdx1_f2 = - sin(sqrtB) - x1 * factorB
+        G[1] = dfdx1_f1 + dfdx1_f2
+        
+        # Compute derivative with respect to x2
+        dfdx2_f1 = - sin(sqrtA) - (x2 + 47.0) * factorA
+        dfdx2_f2 = x1 * factorB
+        G[2] = dfdx2_f1 + dfdx2_f2
+        
+        return G
+    end
     bounds = zeros(2, 2)
     bounds[:,1] .= -512.0
     bounds[:,2] .=  512.0
     xopt = ([512, 404.2319],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestHolderTable()
     f(x) = -abs(sin(x[1]) * cos(x[2]) * exp(abs(1 - sqrt(x[1]^2 + x[2]^2) / π)))
-    ∇f(x) = zeros(2) # TODO
+    
+    function ∇f!(G, x)
+        # Extract variables
+        x1 = x[1]
+        x2 = x[2]
+        R = sqrt(x1^2 + x2^2)
+        
+        # Compute A, T, U, and B
+        A = sin(x1) * cos(x2)
+        T = 1 - R/π
+        U = abs(T)
+        B = exp(U)
+        
+        # Compute z and its sign
+        z = A * B
+        sign_z = z > 0 ? 1.0 : (z < 0 ? -1.0 : 0.0)
+        
+        # Compute derivative of A
+        dA_dx1 = cos(x1) * cos(x2)
+        dA_dx2 = -sin(x1) * sin(x2)
+        
+        # Compute derivative of z = A * B
+        if R < eps(x1)
+            # When R is nearly zero, avoid division by zero
+            dz_dx1 = B * dA_dx1
+            dz_dx2 = B * dA_dx2
+        else
+            sign_T = T > 0 ? 1.0 : (T < 0 ? -1.0 : 0.0)
+            common = (A * sign_T) / (π * R)
+            dz_dx1 = B * (dA_dx1 - common * x1)
+            dz_dx2 = B * (dA_dx2 - common * x2)
+        end
+        
+        # Gradient of f(x) = -|z| is -sign(z) * dz/dx
+        G[1] = -sign_z * dz_dx1
+        G[2] = -sign_z * dz_dx2
+        
+        return G
+    end
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .=  10.0
     xopt = ([8.05502, 9.66459],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestSchwefel(d)
     f(x) = 418.9829 * d - sum(x .* sin.(sqrt.(abs.(x))))
-    ∇f(x) = zeros(d) # TODO
+    
+    function ∇f!(G, x)
+        @inbounds for i in eachindex(x)
+            xi = x[i]
+            absxi = abs(xi)
+            if absxi < eps(xi)
+                dfdx = 0.0
+            else
+                s = sqrt(absxi)
+                dfdx = sin(s) + (xi * cos(s) * sign(xi)) / (2 * s)
+            end
+            G[i] = - dfdx
+        end
+        return G
+    end
+    
     bounds = zeros(d, 2)
     bounds[:,1] .= -500.0
     bounds[:,2] .=  500.0
     xopt = (repeat([420.9687], d),)
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 
 function TestLevyN13()
-    f(x) = sin(3 * π * x[1])^2 + (x[1] - 1)^2 * (1 + sin(3 * π * x[2])^2) + (x[2] - 1)^2 * (1 + sin(2 * π * x[2])^2)
-    ∇f(x) = zeros(2) # TODO
+    f(x) = sin(3π * x[1])^2 + (x[1] - 1)^2 * (1 + sin(3π * x[2])^2) + (x[2] - 1)^2 * (1 + sin(2π * x[2])^2)
+    
+    function ∇f!(G, x)
+        # Extract variables
+        x1 = x[1]
+        x2 = x[2]
+        
+        # Term 1: f₁ = sin(3π*x₁)^2
+        # d/dx₁ f₁ = 6π * sin(3π*x₁) * cos(3π*x₁)
+        dT1_dx1 = 6π * sin(3π * x1) * cos(3π * x1)
+        dT1_dx2 = 0.0
+        
+        # Term 2: f₂ = (x₁ - 1)^2 * (1 + sin(3π*x₂)^2)
+        # d/dx₁ f₂ = 2*(x₁ - 1) * (1 + sin(3π*x₂)^2)
+        dT2_dx1 = 2 * (x1 - 1) * (1 + sin(3π * x2)^2)
+        # d/dx₂ f₂ = (x₁ - 1)^2 * 6π * sin(3π*x₂) * cos(3π*x₂)
+        dT2_dx2 = (x1 - 1)^2 * (6π * sin(3π * x2) * cos(3π * x2))
+        
+        # Term 3: f₃ = (x₂ - 1)^2 * (1 + sin(2π*x₂)^2)
+        # d/dx₁ f₃ = 0\n        dT3_dx1 = 0.0
+        # d/dx₂ f₃ = 2*(x₂ - 1) * (1 + sin(2π*x₂)^2) + (x₂ - 1)^2 * (4π * sin(2π*x₂) * cos(2π*x₂))
+        dT3_dx2 = 2 * (x2 - 1) * (1 + sin(2π * x2)^2) + (x2 - 1)^2 * (4π * sin(2π * x2) * cos(2π * x2))
+        
+        G[1] = dT1_dx1 + dT2_dx1 + dT3_dx1
+        G[2] = dT1_dx2 + dT2_dx2 + dT3_dx2
+        return G
+    end
+    
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
-    bounds[:,2] .=  10.0
+    bounds[:,2] .= 10.0
     xopt = ([1, 1],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestTrid(d)
     f(x) = sum((x .- 1).^2) - sum(x[2:end] .* x[1:end-1])
-    ∇f(x) = zeros(d) # TODO
+    
+    function ∇f!(G, x)
+        d = length(x)
+        if d == 0
+            return G
+        end
+        # Compute gradient for the first element
+        G[1] = 2*(x[1] - 1) - (d > 1 ? x[2] : 0.0)
+        # Compute gradient for middle elements, if any
+        for i in 2:d-1
+            G[i] = 2*(x[i] - 1) - (x[i-1] + x[i+1])
+        end
+        # Compute gradient for the last element, if d > 1
+        if d > 1
+            G[d] = 2*(x[d] - 1) - x[d-1]
+        end
+        return G
+    end
+    
     bounds = zeros(d, 2)
     bounds[:,1] .= -d^2
     bounds[:,2] .=  d^2
-    xopt = ([i*(d + 1. - i) for i in 1:d],)
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    xopt = ([i * (d + 1 - i) for i in 1:d],)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 
 function TestMccormick()
     f(x) = sin(x[1] + x[2]) + (x[1] - x[2])^2 - 1.5 * x[1] + 2.5 * x[2] + 1
-    ∇f(x) = zeros(2) # TODO
+    function ∇f!(G, x)
+        x1 = x[1]
+        x2 = x[2]
+        G[1] = cos(x1 + x2) + 2*(x1 - x2) - 1.5
+        G[2] = cos(x1 + x2) - 2*(x1 - x2) + 2.5
+        return G
+    end
     bounds = zeros(2, 2)
     bounds[:,1] .= -1.5
-    bounds[:,2] .=  4.0
+    bounds[:,2] .= 4.0
     xopt = ([-0.54719, -1.54719],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
@@ -519,133 +747,216 @@ function TestHartmann3D()
     ]
     
     function f(x)
-        f = 0.0
+        f_val = 0.0
         for i in 1:4
             t = 0.0
             for j in 1:3
                 t += A[i,j] * (x[j] - P[i,j])^2
             end
-            f += α[i] * exp(-t)
+            f_val += α[i] * exp(-t)
         end
-        return -f
+        return -f_val
     end
     
-    ∇f(x) = zeros(3) # TODO
+    function ∇f!(G, x)
+        fill!(G, 0.0)
+        for i in 1:4
+            t = 0.0
+            for j in 1:3
+                t += A[i,j] * (x[j] - P[i,j])^2
+            end
+            exp_neg_t = exp(-t)
+            for k in 1:3
+                G[k] += 2 * α[i] * A[i,k] * (x[k] - P[i,k]) * exp_neg_t
+            end
+        end
+        return G
+    end
+    
     bounds = zeros(3, 2)
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
     xopt = ([0.114614, 0.555649, 0.852547],)
-    return TestFunction(3, bounds, xopt, f, ∇f)
+    return TestFunction(3, bounds, xopt, f, ∇f!)
 end
 
 
 function TestHartmann4D()
     α = [1.0, 1.2, 3.0, 3.2]
+    # A and P are 4×6, but only columns 1..4 are used for x[1..4]
     A = [
-        10 3 17 3.5 1.7 8;
-        0.05 10 17 0.1 8 14;
-        3 3.5 1.7 10 17 8;
-        17 8 0.05 10 0.1 14
+        10    3    17   3.5   1.7   8;
+        0.05  10   17   0.1   8     14;
+        3     3.5  1.7  10    17    8;
+        17    8    0.05 10    0.1   14
     ]
     P = 1e-4 * [
-        1312 1696 5569 124 8283 5886;
+        1312 1696 5569 124  8283 5886;
         2329 4135 8307 3736 1004 9991;
         2348 1451 3522 2883 3047 6650;
         4047 8828 8732 5743 1091 381
     ]
-    
+
     function f(x)
-        f = 0.0
+        # x is 4-dimensional; ignore columns 5..6 of A and P
+        sum_val = 0.0
         for i in 1:4
             t = 0.0
-            for j in 1:6
-                t += A[i,j] * (x[j] - P[i,j])^2
+            for j in 1:4
+                t += A[i, j] * (x[j] - P[i, j])^2
             end
-            f += α[i] * exp(-t)
+            sum_val += α[i] * exp(-t)
         end
-        return -f
+        return (1 / 0.839) * (1.1 - sum_val)
     end
-    
-    ∇f(x) = zeros(6) # TODO
-    bounds = zeros(6, 2)
+
+    function ∇f!(G, x)
+        # Zero out G to accumulate in-place
+        fill!(G, 0.0)
+
+        # For each row i in A, P
+        for i in 1:4
+            # Compute tᵢ = Σⱼ A[i,j]*(xⱼ - P[i,j])², j=1..4
+            t = 0.0
+            for j in 1:4
+                t += A[i, j] * (x[j] - P[i, j])^2
+            end
+
+            # Precompute αᵢ * e^(−tᵢ)
+            fac = α[i] * exp(-t)
+
+            # Accumulate partial derivatives in each dimension k
+            for k in 1:4
+                # ∂/∂xₖ of exp(-tᵢ) = exp(-tᵢ)*[ -∂tᵢ/∂xₖ ], but the minus sign is
+                # canceled by the negative sign in the function definition,
+                # so it becomes a plus in the final expression.
+                # Here, ∂tᵢ/∂xₖ = 2*A[i,k]*(xₖ - P[i,k])
+                G[k] += 2 * A[i, k] * (x[k] - P[i, k]) * fac
+            end
+        end
+
+        # Multiply by the outer constant factor (1 / 0.839)
+        @inbounds for k in 1:4
+            G[k] *= (1 / 0.839)
+        end
+
+        return G
+    end
+
+    bounds = zeros(4, 2)
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
-    xopt = ([0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573],)
-    return TestFunction(6, bounds, xopt, f, ∇f)
-end
+    # Known reference optimum in 4D (still uses only the first 4 coords)
+    xopt = ([0.20169, 0.150011, 0.476874, 0.275332],)
 
+    return TestFunction(4, bounds, xopt, f, ∇f!)
+end
 
 function TestHartmann6D()
     α = [1.0, 1.2, 3.0, 3.2]
     A = [
-        10 3 17 3.5 1.7 8;
-        0.05 10 17 0.1 8 14;
-        3 3.5 1.7 10 17 8;
-        17 8 0.05 10 0.1 14
+        10    3    17   3.5   1.7   8;
+        0.05  10   17   0.1   8     14;
+        3     3.5  1.7  10    17    8;
+        17    8    0.05 10    0.1   14
     ]
     P = 1e-4 * [
-        1312 1696 5569 124 8283 5886;
+        1312 1696 5569 124  8283 5886;
         2329 4135 8307 3736 1004 9991;
         2348 1451 3522 2883 3047 6650;
         4047 8828 8732 5743 1091 381
     ]
-    
+
+    # The function f(x) = -∑ᵢ αᵢ exp(-tᵢ), where tᵢ = ∑ⱼ Aᵢⱼ (xⱼ - Pᵢⱼ)²
     function f(x)
-        f = 0.0
+        total = 0.0
         for i in 1:4
             t = 0.0
             for j in 1:6
                 t += A[i,j] * (x[j] - P[i,j])^2
             end
-            f += α[i] * exp(-t)
+            total += α[i] * exp(-t)
         end
-        return -f
+        return -total
     end
-    
-    ∇f(x) = zeros(6) # TODO
+
+    # In-place gradient of f, ∇f!(G, x)
+    function ∇f!(G, x)
+        fill!(G, 0.0)  # zero out the gradient array first
+        for i in 1:4
+            # Compute tᵢ = ∑ⱼ Aᵢⱼ (xⱼ - Pᵢⱼ)²
+            t = 0.0
+            for j in 1:6
+                t += A[i,j] * (x[j] - P[i,j])^2
+            end
+            # Each term contributes αᵢ exp(-tᵢ) to the sum,
+            # so the partial derivative wrt xₖ is:
+            #   d/dxₖ [ - αᵢ exp(-tᵢ) ] =  2 αᵢ Aᵢₖ (xₖ - Pᵢₖ) exp(-tᵢ)
+            #   (the sign flips twice: once for the negative outside,
+            #    and once for the derivative of exp(-tᵢ).)
+            factor = α[i] * exp(-t)
+            for k in 1:6
+                G[k] += 2 * A[i,k] * (x[k] - P[i,k]) * factor
+            end
+        end
+        return G
+    end
+
+    # Bounds, optimum, and TestFunction constructor
     bounds = zeros(6, 2)
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
     xopt = ([0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573],)
-    return TestFunction(6, bounds, xopt, f, ∇f)
+    return TestFunction(6, bounds, xopt, f, ∇f!)
 end
 
 
 function TestConstant(n=0.; lbs::Vector{<:T}, ubs::Vector{<:T}) where T <: Real
     f(x) = n
-    ∇f(x) = zeros(length(x))
+    ∇f!(G, x) = begin
+        fill!(G, 0.)
+        return G
+    end
     xopt = (zeros(length(lbs)),)
     bounds = hcat(lbs, ubs)
-    return TestFunction(length(lbs), bounds, xopt, f, ∇f)
+    return TestFunction(length(lbs), bounds, xopt, f, ∇f!)
 end
 
 
 function TestQuadratic1D(a=1, b=0, c=0; lb=-1.0, ub=1.0)
     f(x) = a*first(x)^2 + b*first(x) + c
-    ∇f(x) = [2*a*first(x) + b]
+    ∇f!(G, x) = begin
+        G[1] = 2*a*first(x) + b
+    end
     bounds = [lb ub]
     xopt = (zeros(1),)
-    return TestFunction(1, bounds, xopt, f, ∇f)
+    return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
 # Create a test function named TestLinearCosine1D that takes a paramater for the frequency of the cosine
 # and a parameter for the amplitude of the cosine. The function should be a linear function of x plus a cosine
 # function of the form a*cos(b*x). The function should have a single optimum at x=0.
+
 function TestLinearCosine1D(a=1, b=1; lb=-1.0, ub=1.0)
     f(x) = a*first(x) * cos(b*first(x))
-    ∇f(x) = [a*cos(b*first(x)) - a*b*first(x)*sin(b*first(x))]
+    ∇f(G, x) = begin
+        G[1] = a*cos(b*first(x)) - a*b*first(x)*sin(b*first(x))
+        return G
+    end
     bounds = [lb ub]
     xopt = (zeros(1),) # TODO
-    return TestFunction(1, bounds, xopt, f, ∇f)
+    return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
 
 
 function TestShekel()
-    C = [4. 1. 8. 6. 3. 2. 5. 8. 6. 7.;
+    C = [
+         4. 1. 8. 6. 3. 2. 5. 8. 6. 7.;
          4. 1. 8. 6. 7. 9. 3. 1. 2. 3.;
          4. 1. 8. 6. 3. 2. 5. 8. 6. 7.;
-         4. 1. 8. 6. 7. 9. 3. 1. 2. 3.]
+         4. 1. 8. 6. 7. 9. 3. 1. 2. 3.
+    ]
     β = [0.1, 0.2, 0.2, 0.4, 0.4, 0.6, 0.3, 0.7, 0.5, 0.5]
     m = 10
 
@@ -661,80 +972,82 @@ function TestShekel()
         return -f
     end
 
-    function ∇f(x)
-        df = zeros(4)
+    function ∇f!(G, x)
         for i in 1:m
             t = 0.0
             for j in 1:4
                 t += (x[j] - C[j,i])^2
             end
             for j in 1:4
-                df[j] += 2 * (x[j] - C[j,i]) / (t + β[i])^2
+                G[j] += 2 * (x[j] - C[j,i]) / (t + β[i])^2
             end
         end
-        return -df
+        G[:] = -G[:]
+        return G
     end
 
     bounds = [zeros(4) 10ones(4)]
     xopt = ([4.0, 4.0, 4.0, 4.0],)
-    return TestFunction(4, bounds, xopt, f, ∇f)
+    return TestFunction(4, bounds, xopt, f, ∇f!)
 end
 
 
 function TestDropWave()
-    f(x) = -(1 + cos(12*sqrt(sum(x.^2)))) / (0.5*sum(x.^2) + 2)
+    f(x) = begin
+        sum_x = x[1]*x[1] + x[2]*x[2]
+        -(1 + cos(12*sqrt(sum_x))) / (0.5*sum_x + 2)
+    end
     
-    function ∇f(x)
-        t = 12 * sqrt(sum(x.^2))
-        df = zeros(2)
+    function ∇f!(G, x)
+        sum_x = x[1]*x[1] + x[2]*x[2]
+        t = 12 * sqrt(sum_x)
         for i in 1:2
-            df[i] = 12 * x[i] * sin(t) / sqrt(sum(x.^2)) / (0.5*sum(x.^2) + 2) - (1 + cos(t)) * (x[i] / (0.5*sum(x.^2) + 2)^2)
+            G[i] = 12 * x[i] * sin(t) / sqrt(sum_x) / (0.5*sum_x + 2) - (1 + cos(t)) * (x[i] / (0.5*sum_x + 2)^2)
         end
-        return -df
+        G[:] = -G[:]
+        return G
     end
 
     bounds = zeros(2, 2)
     bounds[:,1] .= -5.12
     bounds[:,2] .=  5.12
     xopt = ([0.0, 0.0],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
 function TestGriewank(d)
     f(x) = sum(x.^2) / 4000 - prod(cos.(x ./ sqrt.(collect(1:d)))) + 1
     
-    function ∇f(x)
-        df = zeros(d)
+    function ∇f!(G, x)
         for i in 1:d
-            df[i] = x[i] / 2000 + prod(cos.(x ./ sqrt.(collect(1:d)))) * sin(x[i] / sqrt(i))
+            G[i] = x[i] / 2000 + prod(cos.(x ./ sqrt.(collect(1:d)))) * sin(x[i] / sqrt(i))
         end
-        return df
+        return G
     end
 
     bounds = zeros(d, 2)
     bounds[:,1] .= -600.0
     bounds[:,2] .=  600.0
     xopt = (zeros(d),)
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 
 function TestBohachevsky()
     f(x) = x[1]^2 + 2*x[2]^2 - 0.3*cos(3π*x[1]) - 0.4*cos(4π*x[2]) + 0.7
     
-    function ∇f(x)
-        df = zeros(2)
-        df[1] = 2*x[1] + 0.9*π*sin(3π*x[1])
-        df[2] = 4*x[2] + 1.6*π*sin(4π*x[2])
-        return df
+    function ∇f!(G, x)
+        G[1] = 2*x[1] + 0.9*π*sin(3π*x[1])
+        G[2] = 4*x[2] + 1.6*π*sin(4π*x[2])
+        return G
     end
 
     bounds = zeros(2, 2)
     bounds[:,1] .= -100.0
     bounds[:,2] .=  100.0
     xopt = ([0.0, 0.0],)
-    return TestFunction(2, bounds, xopt, f, ∇f)
+    return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
 
@@ -749,14 +1062,13 @@ function TestGriewank(d)
         return 1 + sum/4000 - product
     end
     
-    function ∇f(x)
-        grad = zeros(length(x))
+    function ∇f!(G, x)
         for i in 1:length(x)
             sin_term = sin(x[i]/sqrt(i))
             cos_term = prod([cos(x[j]/sqrt(j)) for j=1:length(x) if j != i])
-            grad[i] = 2*x[i]/4000 + sin_term * cos_term
+            G[i] = 2*x[i]/4000 + sin_term * cos_term
         end
-        return grad
+        return G
     end
 
     bounds = zeros(d, 2)
@@ -764,5 +1076,5 @@ function TestGriewank(d)
     bounds[:, 2] .= 600.
     xopt = (zeros(d),)
 
-    return TestFunction(d, bounds, xopt, f, ∇f)
+    return TestFunction(d, bounds, xopt, f, ∇f!)
 end

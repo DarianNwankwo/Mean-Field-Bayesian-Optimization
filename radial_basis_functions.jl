@@ -55,15 +55,6 @@ A stable generic constructor for the struct RadialBasisFunction defined above. I
 computes all the necessary attributes provided the user gives a kernel function
 k, in terms of the normed distance, and hyperparameter vector θ.
 """
-# function RadialBasisFunctionGeneric(k::Function, θ::Vector{T}) where T <: Real
-#     # Define the radial basis function ψ(ρ)
-#     ψ(ρ) = k(ρ, θ)
-#     Dρ_ψ, Dρρ_ψ, ∇θ_ψ = compute_derivatives(k, θ, ψ)
-    
-#     # Return the constructed RadialBasisFunction with concrete types
-#     return RadialBasisFunction(θ, ψ, Dρ_ψ, Dρρ_ψ, ∇θ_ψ)
-# end
-
 function RadialBasisFunctionGeneric(k::K, θ::Vector{T}) where {K, T <: Real}
     # Compute derivatives using your existing method
     ψ(ρ) = k(ρ, θ)
@@ -129,9 +120,9 @@ gradient with respect to the hyperparameters and we also want the mixed partials
 i.e. perturbations of the gradient with respect to the kernel hyperparameters:
 ∂/∂θ[ ψ'(ρ) ].
 """
-eval_k(rbf::RadialBasisFunction, r::Vector{T}) where T <: Real = rbf(norm(r))
+eval_k(rbf::RadialBasisFunction, r::AbstractVector{T}) where T <: Real = rbf(norm(r))
 
-function eval_∇k(rbf::RadialBasisFunction, r::Vector{T}) where T <: Real
+function eval_∇k(rbf::RadialBasisFunction, r::AbstractVector{T}) where T <: Real
     ρ = norm(r)
     if ρ == 0
         return 0*r
