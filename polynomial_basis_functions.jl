@@ -18,7 +18,33 @@ end
 function PolynomialBasisFunction(basis_functions::NTuple{N, Function}) where {N}
     basis_gradients = ntuple(i -> x -> ForwardDiff.gradient(basis_functions[i], x), N)
     basis_hessians  = ntuple(i -> x -> ForwardDiff.hessian(basis_functions[i], x), N)
-    return PolynomialBasisFunction{N, typeof(basis_functions), typeof(basis_gradients), typeof(basis_hessians)}(basis_functions, basis_gradients, basis_hessians)
+    return PolynomialBasisFunction{
+        N,
+        typeof(basis_functions),
+        typeof(basis_gradients),
+        typeof(basis_hessians)
+    }(
+        basis_functions,
+        basis_gradients,
+        basis_hessians
+    )
+end
+
+function PolynomialBasisFunction(
+    basis_functions::NTuple{N, Function},
+    basis_gradients::NTuple{N, Function},
+    basis_hessians::NTuple{N, Function}
+) where {N}
+    return PolynomialBasisFunction{
+      N,
+      typeof(basis_functions),
+      typeof(basis_gradients),
+      typeof(basis_hessians)
+    }(
+        basis_functions,
+        basis_gradients,
+        basis_hessians
+    )
 end
 
 get_basis_functions(pbf::PolynomialBasisFunction) = pbf.basis_functions
@@ -45,7 +71,9 @@ function eval_basis!(pbf::PolynomialBasisFunction{N, F, G, H}, x::AbstractVector
     
     @views begin
         for i in 1:length(pbf)
-            out[1, i] = pbf.basis_functions[i](x)
+            bf = pbf.basis_functions[i]
+            out[1, i] = bf(x)
+            # out[1, i] = pbf.basis_functions[i](x)
         end
     end
 
@@ -95,7 +123,8 @@ function eval_∇basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out:
     # basis_evaluation = zeros(length(x), length(basis_functions))
 
     for i in 1:length(pbf.basis_gradients)
-        out[:, i] = pbf.basis_gradients[i](x)
+        # out[:, i] = pbf.basis_gradients[i](x)
+        pbf.basis_gradients[i]((@view out[:, i]), x)
     end
 
     return nothing
@@ -116,7 +145,8 @@ end
 
 function eval_Hbasis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::AbstractArray{T}) where T <: Real
     for k in 1:length(pbf.basis_hessians)
-        out[:, :, 1, k] = pbf.basis_hessians[k](x)
+        # out[:, :, 1, k] = pbf.basis_hessians[k](x)
+        pbf.basis_hessians[k]((@view out[:, :, 1, k]), x)
     end
 
     return nothing
@@ -124,22 +154,3 @@ end
 
 (pbf::PolynomialBasisFunction)(x::AbstractVector{T}) where T <: Real = eval_basis(pbf, x)
 (pbf::PolynomialBasisFunction)(X::AbstractMatrix{T}) where T <: Real = eval_basis(pbf, X)
-
-
-struct PreallocatedContainers
-    px
-    ∇px
-    Hpx
-    KxX
-    ∇KxX
-end
-
-function PreallocatedContainers(pbf::PolynomialBasisFunction, dim::Int)
-    return PreallocatedContainers(
-        zeros(1, length(pbf.basis_functions)),
-        zeros(dim, length(pbf.basis_functions)),
-        zeros(dim, dim, 1, length(pbf.basis_functions)),
-        nothing,
-        nothing
-    )
-end

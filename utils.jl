@@ -134,25 +134,39 @@ end
 
 function get_trends(bias, dim)
     surrogate_trends = [
-        PolynomialBasisFunction(Tuple(
-            [x -> 0.]
-        )),
-        PolynomialBasisFunction(Tuple(
-            [x -> bias]
-        )),
-        PolynomialBasisFunction(Tuple(
-            [x -> x[i] for i in 1:dim]
-        )),
-        PolynomialBasisFunction(Tuple(
-            [x -> bias, x -> dot(x, x)]
-        ))
+        PolynomialBasisFunction(
+            Tuple([ϕ_zero]),
+            Tuple([∇ϕ_zero!]),
+            Tuple([Hϕ_zero!])
+        ),
+        PolynomialBasisFunction(
+            Tuple([ϕ_constant]),
+            Tuple([∇ϕ_constant!]),
+            Tuple([Hϕ_constant!])
+        )
+        ,
+        PolynomialBasisFunction(
+            get_linear_phi_functions(dim),
+            get_∇linear_phi_functions(dim),
+            get_Hlinear_phi_functions(dim)
+        ),
+        PolynomialBasisFunction(
+            Tuple([ϕ_constant, ϕ_quadratic]),
+            Tuple([∇ϕ_constant!, ∇ϕ_quadratic!]),
+            Tuple([Hϕ_constant!, Hϕ_quadratic!])
+        )
     ]
 
     coefficients = [ones(length(pbf)) for pbf in surrogate_trends]
 
     initial_observation_sizes = [1, 1, dim, dim + 1]
-
     function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i], dim) for i in 1:length(coefficients)]
+
+    function_trends = []
+    for i in 1:length(coefficients)
+        # function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i], dim) for i in 1:length(coefficients)]
+        push!(function_trends, PolynomialTrend(surrogate_trends[i], coefficients[i], dim))
+    end
 
     return surrogate_trends, function_trends, initial_observation_sizes
 end
@@ -231,7 +245,7 @@ function update_simple_regrets!(regrets::AbstractVector{T}, observations::Abstra
     return nothing
 end
 
-function generate_initial_guesses(N::Integer, lbs::Vector{T}, ubs::Vector{T},) where T <: Number
+function generate_initial_guesses(N, lbs, ubs)
     ϵ = 1e-6
     seq = SobolSeq(lbs, ubs)
     initial_guesses = reduce(hcat, next!(seq) for i = 1:N)

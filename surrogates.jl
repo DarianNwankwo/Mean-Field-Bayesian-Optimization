@@ -17,6 +17,7 @@ get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_
 get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
 get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 set_decision_rule!(s::AbstractSurrogate, g::DecisionRule) = s.g = g
+get_dim(s::AbstractSurrogate) = size(s.X, 1)
 
 
 """
@@ -38,8 +39,8 @@ mutable struct HybridSurrogate{RBF<:StationaryKernel,PBF<:ParametricRepresentati
     X::Matrix{Float64} # Covariates
     P::Matrix{Float64} # Parametric term design matrix
     K::Matrix{Float64} # Covariance matrix for Gaussian process
-    # L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
-    L::Matrix{Float64}
+    L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
+    # L::Matrix{Float64}
     y::Vector{Float64}
     d::Vector{Float64} # Coefficients for Gaussian process
     λ::Vector{Float64} # Coefficients for parametric/trend term
@@ -67,6 +68,7 @@ mutable struct Surrogate{RBF<:StationaryKernel} <: AbstractSurrogate
     g::DecisionRule
     observed::Int
     capacity::Int
+    containers::PreallocatedContainers
 end
 
 
@@ -198,7 +200,7 @@ function HybridSurrogate(
 
     observed = length(y)
 
-    containers = PreallocatedContainers(ϕ, dim)
+    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
 
     return HybridSurrogate(
         ψ,
@@ -235,7 +237,7 @@ function HybridSurrogate(
     λ_polynomial = zeros(length(ϕ))
     preallocated_y = zeros(capacity)
     observed = 0
-    containers = PreallocatedContainers(ϕ, dim)
+    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
 
     return HybridSurrogate(
         ψ,
@@ -287,6 +289,8 @@ function Surrogate(
     preallocated_y = zeros(capacity)
     preallocated_y[1:N] = y
 
+    containers = PreallocatedContainers(1, d, capacity, length(ψ))
+
     return Surrogate(
         ψ,
         preallocated_X,
@@ -297,7 +301,8 @@ function Surrogate(
         observation_noise,
         decision_rule,
         length(y),
-        capacity
+        capacity,
+        containers
     )
 end
 
@@ -314,6 +319,8 @@ function Surrogate(
     preallocated_d = zeros(capacity)
     preallocated_y = zeros(capacity)
 
+    containers = PreallocatedContainers(1, dim, capacity, length(ψ))
+
     return Surrogate(
         ψ,
         preallocated_X,
@@ -324,9 +331,17 @@ function Surrogate(
         observation_noise,
         decision_rule,
         0,
-        capacity
+        capacity,
+        containers
     )
 end
+
+
+get_active_KxX(s::AbstractSurrogate) = @view s.containers.KxX[1:get_observed(s)]
+get_active_grad_KxX(s::AbstractSurrogate) = @view s.containers.grad_KxX[:, 1:get_observed(s)]
+get_active_δKXX(s::AbstractSurrogate) = @view s.containers.δKXX[1:get_observed(s), 1:get_observed(s)]
+get_active_Hk(s::AbstractSurrogate) = @view s.containers.Hk[:, :]
+get_active_Hσ(s::AbstractSurrogate) = @view s.containers.Hσ[:, :]
 
 
 """
@@ -336,34 +351,42 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
     @views begin
         N = get_observed(s)
         s.ψ = kernel
-        σn2 = get_observation_noise(s)
-        s.K[1:N, 1:N] .= eval_KXX(get_kernel(s), get_active_covariates(s)) + (JITTER + σn2) * I
-        s.L[1:N, 1:N] .= LowerTriangular(
+        observation_noise = get_observation_noise(s)
+        eval_KXX!(
+            kernel,
+            get_active_covariates(s),
+            get_active_covariance(s),
+            s.containers.diff_x
+        )
+        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
+        s.L[1:N, 1:N] = LowerTriangular(
             cholesky(
-                Hermitian(s.K[1:N, 1:N])
+                Hermitian(get_active_covariance(s))
             ).L
         )
-        # s.L[1:N, 1:N] .= cholesky(
-        #     Hermitian(s.K[1:N, 1:N])
-        # ).L
         s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
     end
 end
 
 function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
+    diff_x = zeros(get_dim(s))
     @views begin
         N = get_observed(s)
         s.ψ = kernel
-        σn2 = get_observation_noise(s)
-        s.K[1:N, 1:N] = eval_KXX(kernel, get_active_covariates(s)) + (JITTER + σn2) * I
+        observation_noise = get_observation_noise(s)
+        # s.K[1:N, 1:N] = eval_KXX(kernel, get_active_covariates(s)) + (JITTER + σn2) * I
+        eval_KXX!(
+            kernel,
+            get_active_covariates(s),
+            get_active_covariance(s),
+            s.containers.diff_x
+        )
+        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
         s.L[1:N, 1:N] = LowerTriangular(
             cholesky(
-                Hermitian(s.K[1:N, 1:N])
+                Hermitian(get_active_covariance(s))
             ).L
         )
-        # s.L[1:N, 1:N] = cholesky(
-        #     Hermitian(s.K[1:N, 1:N])
-        # ).L
         d, λ = coefficient_solve(
             get_active_covariance(s),
             get_active_parametric_basis_matrix(s),
@@ -385,19 +408,24 @@ function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         dim, N = size(X)
 
         s.X[:, 1:N] = X
+        s.observed = N
         observation_noise = get_observation_noise(s)
-        K = eval_KXX(get_kernel(s), s.X[:, 1:N]) + (JITTER + observation_noise) * I
-        s.K[1:N, 1:N] = K
+        eval_KXX!(
+            get_kernel(s),
+            get_active_covariates(s),
+            get_active_covariance(s),
+            s.containers.diff_x
+        )
+        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
         s.L[1:N, 1:N] = LowerTriangular(
             cholesky(
                 Hermitian(
-                    s.K[1:N, 1:N]
+                    get_active_covariance(s)
                 )
             ).L
         )
         s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ y)
         s.y[1:N] = y
-        s.observed = length(y)
     end
 end
 
@@ -406,25 +434,38 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         dim, N = size(X)
 
         s.X[:, 1:N] = X
+        s.observed = N
         observation_noise = get_observation_noise(s)
-        KXX = eval_KXX(get_kernel(s), s.X[:, 1:N]) + (JITTER + observation_noise) * I
-        s.K[1:N, 1:N] = KXX
+        eval_KXX!(
+            get_kernel(s),
+            get_active_covariates(s),
+            get_active_covariance(s),
+            s.containers.diff_x
+        )
+        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
         s.L[1:N, 1:N] = LowerTriangular(
             cholesky(
                 Hermitian(
-                    s.K[1:N, 1:N]
+                    get_active_covariance(s)
                 )
             ).L
         )
-        ϕ = get_parametric_basis_function(s)
-        eval_basis!(ϕ, X, s.P[1:N, 1:length(ϕ)])
-        PX = s.P[1:N, 1:length(ϕ)]
-        s.P[1:N, 1:length(ϕ)] = PX
-        d, λ = coefficient_solve(KXX, PX, y)
+        eval_basis!(
+            get_parametric_basis_function(s),
+            get_active_covariates(s),
+            get_active_parametric_basis_matrix(s)
+        )
+            # s.P[1:N, 1:length(ϕ)])
+        # PX = s.P[1:N, 1:length(ϕ)]
+        # s.P[1:N, 1:length(ϕ)] = PX
+        d, λ = coefficient_solve(
+            get_active_covariance(s),
+            get_active_parametric_basis_matrix(s),
+            y
+        )
         s.d[1:N] = d
         s.λ[1:length(ϕ)] = λ
         s.y[1:N] = y
-        s.observed = length(y)
     end
 end
 
@@ -461,7 +502,7 @@ function insert!(s::AbstractSurrogate, x::Vector{T}, y::T) where {T<:Real}
 end
 
 
-function update_covariance!(s::AbstractSurrogate, x::Vector{T}, y::T) where {T<:Real}
+function update_covariance!(s::AbstractSurrogate, x::Vector{T}) where {T<:Real}
     @views begin
         update_index = get_observed(s)
         active_X = get_covariates(s)[:, 1:update_index-1]
@@ -470,7 +511,14 @@ function update_covariance!(s::AbstractSurrogate, x::Vector{T}, y::T) where {T<:
         # Update the main diagonal
         s.K[update_index, update_index] = kernel(0.0) + get_observation_noise(s) + JITTER
         # Update the rows and columns with covariance vector formed from k(x, X)
-        s.K[update_index, 1:update_index-1] = eval_KxX(kernel, x, active_X)'
+        # s.K[update_index, 1:update_index-1] = eval_KxX(kernel, x, active_X)'
+        eval_KxX!(
+            kernel,
+            x,
+            active_X,
+            s.K[update_index, 1:update_index-1],
+            s.containers.KxX
+        )
         s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
     end
 end
@@ -535,7 +583,7 @@ function condition!(s::HybridSurrogate, xnew::Vector{T}, ynew::T) where {T<:Real
     end
     insert!(s, xnew, ynew) # Updates covariate matrix X and observation vector y
     increment!(s)
-    update_covariance!(s, xnew, ynew) # Updates covariance matrix K
+    update_covariance!(s, xnew) # Updates covariance matrix K
     update_cholesky!(s) # Updates cholesky factorization matrix L
     update_parametric_design_matrix!(s) # Updates parametric design matrix P
     update_coefficients!(s) # Updates coefficients d, λ
@@ -549,7 +597,7 @@ function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where {T<:Real}
     end
     insert!(s, xnew, ynew)
     increment!(s)
-    update_covariance!(s, xnew, ynew)
+    update_covariance!(s, xnew)
     update_cholesky!(s)
     update_coefficients!(s)
     return s
@@ -558,8 +606,8 @@ end
 
 function eval(
     s::HybridSurrogate,
-    x::Vector{T},
-    θ::Vector{T}) where {T<:Real}
+    x::AbstractVector{T},
+    θ::AbstractVector{T}) where {T<:Real}
     @views begin
         sx = LazyStruct()
         set(sx, :s, s)
@@ -680,8 +728,8 @@ end
 
 function eval(
     s::Surrogate,
-    x::Vector{T},
-    θ::Vector{T}) where {T<:Real}
+    x::AbstractVector{T},
+    θ::AbstractVector{T}) where {T<:Real}
     @views begin
         sx = LazyStruct()
         set(sx, :s, s)
@@ -697,18 +745,40 @@ function eval(
 
         d, N = size(X)
 
-        sx.kx = () -> eval_KxX(kernel, x, X)
-        sx.∇kx = () -> eval_∇KxX(kernel, x, X)
+        sx.kx = function()
+            return eval_KxX!(
+                kernel,
+                x,
+                X,
+                get_active_KxX(sx.s),
+                sx.s.containers.diff_x
+            )
+        end
+        sx.∇kx = function() 
+            return eval_∇KxX!(
+                kernel,
+                x,
+                X,
+                get_active_grad_KxX(sx.s),
+                sx.s.containers.diff_x
+            )
+        end
 
         sx.μ = () -> dot(sx.kx, c)
         sx.∇μ = () -> sx.∇kx * c
         sx.dμ = () -> vcat(sx.μ, sx.∇μ)
         sx.Hμ = function ()
-            H = zeros(d, d)
+            H = get_active_Hk(sx.s)
+            Hf = zeros(size(H))
+            fill!(H, 0.)
             for j = 1:N
-                H += c[j] * eval_Hk(kernel, x - X[:, j])
+                Hf += c[j] * eval_Hk!(
+                    kernel,
+                    x - X[:, j],
+                    H
+                )
             end
-            return H
+            return Hf
         end
 
         sx.w = () -> L' \ (L \ sx.kx)
@@ -724,13 +794,17 @@ function eval(
         end
         sx.∇σ = () -> -(sx.∇kx * sx.w) / sx.σ
         sx.Hσ = function ()
-            H = -sx.∇σ * sx.∇σ' - sx.∇kx * sx.Dw
+            Hk = get_active_Hk(sx.s)
+            Hσ = get_active_Hσ(sx.s)
+            fill!(Hk, 0.)
+            fill!(Hσ, 0.)
+            Hσ .= -sx.∇σ * sx.∇σ' - sx.∇kx * sx.Dw
             w = sx.w
             for j = 1:N
-                H -= w[j] * eval_Hk(kernel, x - X[:, j])
+                Hσ .-= w[j] * eval_Hk!(kernel, x - X[:, j], Hk)
             end
-            H /= sx.σ
-            return H
+            Hσ /= sx.σ
+            return Hσ
         end
 
         sx.y = () -> y
@@ -828,9 +902,14 @@ function log_likelihood(s::Surrogate)
 end
 
 function δlog_likelihood(s::Surrogate, δθ::Vector{T}) where {T<:Real}
-    kernel = get_kernel(s)
-    X = get_active_covariates(s)
-    δK = eval_Dθ_KXX(kernel, X, δθ)
+    δK = eval_Dθ_KXX!(
+        get_kernel(s),
+        get_active_covariates(s),
+        δθ,
+        get_active_δKXX(s),
+        s.containers.diff_x,
+        s.containers.δψij
+    )
     c = get_active_coefficients(s)
     L = get_active_cholesky(s)
     return (c' * δK * c - tr(L' \ (L \ δK))) / 2
@@ -838,67 +917,20 @@ end
 
 function ∇log_likelihood(s::AbstractSurrogate)
     nθ = length(s.ψ.θ)
-    δθ = zeros(nθ)
-    ∇L = zeros(nθ)
 
     for j in 1:nθ
-        δθ[:] .= 0.0
-        δθ[j] = 1.0
-        ∇L[j] = δlog_likelihood(s, δθ)
+        s.containers.δθ[:] .= 0.0
+        s.containers.δθ[j] = 1.0
+        s.containers.grad_L[j] = δlog_likelihood(s, s.containers.δθ)
     end
 
-    return ∇L
-end
-
-"""
-This only optimizes for lengthscale hyperparameter where the lengthscale is the
-same in each respective dimension.
-"""
-function optimize!(
-    s::AbstractSurrogate;
-    starts::Matrix{T},
-    lowerbounds::Vector{T},
-    upperbounds::Vector{T},
-    minimizers_container::Vector{Vector{T}},
-    minimums_container::Vector{T}) where {T<:Real}
-    M = size(starts, 2)
-    
-    for i in 1:M
-        minimizers_container[i], minimums_container[i] = hyperparameter_solve(
-            s,
-            start=starts[:, i],
-            lowerbounds=lowerbounds,
-            upperbounds=upperbounds
-        )
-    end
-
-    candidates = [(minimizers_container[i], minimums_container[i]) for i in 1:M]
-    candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
-    mini, j_mini = findmin(pair -> pair[2], candidates)
-    θ = candidates[j_mini][1]
-    set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
-
-    return nothing
-end
-
-function log_likelihood_constructor(s::AbstractSurrogate)
-    θ = θ -> begin
-        # Note: this updates the given surrogate
-        set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
-        return -log_likelihood(s)
-    end
-
-    ∇θ = θ -> begin
-        set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
-        return -∇log_likelihood(s)
-    end
-
-    return (θ, ∇θ)
+    return s.containers.grad_L
 end
 
 
 function optimize!(
-    s::AbstractSurrogate;
+    # s::AbstractSurrogate;
+    s::Surrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},
     starts::Matrix{T},
@@ -913,6 +945,7 @@ function optimize!(
 
     function fg!(F, G, θ::Vector{T}) where T <: Real
         set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
+        # TODO: log likelihood is allocating. Fix this here
         if G !== nothing G .= -∇log_likelihood(s) end
         if F !== nothing return -log_likelihood(s) end
     end

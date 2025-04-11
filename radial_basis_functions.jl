@@ -1,4 +1,5 @@
 get_hyperparameters(sk::AbstractKernel) = sk.θ
+Base.length(k::StationaryKernel) = length(get_hyperparameters(k))
 
 @doc raw"""
 A radial basis function is defined strictly in terms of the pairwise distance between
@@ -8,25 +9,24 @@ about the gradient and hessian with respect to this distance metric which we den
 as Dρ_ψ and Dρρ_ψ respectively.
 
 One also cares about computing the gradient of ψ with respect to the radial basis
-function's hyperparameters which we denote as ∇θ_ψ. 
+function's hyperparameters which we denote as ∇θ_ψ!. 
 """
-struct RadialBasisFunction{T <: Real, K, D1, D2, D3} <: StationaryKernel
-    θ::Vector{T}
+struct RadialBasisFunction{N, T <: Real, K <: Function, D1 <: Function, D2 <: Function, D3 <: Function} <: StationaryKernel
+    θ::MVector{N, T}
     ψ::K                   # concrete kernel function
     Dρ_ψ::D1              # derivative with respect to ρ
     Dρρ_ψ::D2             # second derivative with respect to ρ
-    ∇θ_ψ::D3              # derivative with respect to hyperparameters
+    ∇θ_ψ!::D3              # derivative with respect to hyperparameters
 end
-
 
 function Base.show(io::IO, r::RadialBasisFunction{T}) where T
     print(io, "RadialBasisFunction{", T, "}")
 end
 
-(rbf::RadialBasisFunction)(ρ::Real) = rbf.ψ(ρ)
+(rbf::RadialBasisFunction)(ρ::Real) = rbf.ψ(ρ, rbf.θ)
 derivative(rbf::RadialBasisFunction) = rbf.Dρ_ψ
 second_derivative(rbf::RadialBasisFunction) = rbf.Dρρ_ψ
-hypersgradient(rbf::RadialBasisFunction) = rbf.∇θ_ψ
+hypersgradient(rbf::RadialBasisFunction) = rbf.∇θ_ψ!
 
 function set_hyperparameters!(rbf::RadialBasisFunction, θ::Vector{T}) where T <: Real
     @views begin
@@ -36,81 +36,83 @@ function set_hyperparameters!(rbf::RadialBasisFunction, θ::Vector{T}) where T <
     return rbf
 end
 
+
 """
-A generic way of constructing a radial basis functions with a given kernel
-using automatic differentiation. The kernel should be a function of the normed
-distance ρ and the hyperparameter vector θ. The kernel should be
-differentiable with respect to ρ and θ. The kernel should be positive
-definite.
+    Matern52_ψ(ρ, θ)
+
+Evaluate the Matern 5/2 kernel at distance ρ with hyperparameters θ.
+Assumes that θ is a vector with the length-scale l at θ[1].
 """
-function compute_derivatives(k::Function, θ::Vector{T}, ψ::Function) where T
-    Dρ_ψ(ρ) = ForwardDiff.derivative(ψ, ρ)        # Derivative wrt ρ
-    Dρρ_ψ(ρ) = ForwardDiff.derivative(Dρ_ψ, ρ)    # Second derivative wrt ρ
-    ∇θ_ψ(ρ) = ForwardDiff.gradient(θ -> k(ρ, θ), θ)  # Gradient wrt θ
-    return Dρ_ψ, Dρρ_ψ, ∇θ_ψ  # Return all derivatives
+function Matern52_ψ(ρ::Real, θ::AbstractVector{<:Real})
+    l = θ[1]
+    c = sqrt(5.0) / l
+    s = c * ρ
+    return (1 + s + s^2/3) * exp(-s)
 end
 
 """
-A stable generic constructor for the struct RadialBasisFunction defined above. It
-computes all the necessary attributes provided the user gives a kernel function
-k, in terms of the normed distance, and hyperparameter vector θ.
+    Matern52_Dρψ(ρ, θ)
+
+Evaluate the first derivative of the Matern 5/2 kernel with respect to ρ.
 """
-function RadialBasisFunctionGeneric(k::K, θ::Vector{T}) where {K, T <: Real}
-    # Compute derivatives using your existing method
-    ψ(ρ) = k(ρ, θ)
-    Dρ_ψ, Dρρ_ψ, ∇θ_ψ = compute_derivatives(k, θ, ψ)
-    
-    # Construct the RadialBasisFunction with the concrete kernel function k.
-    return RadialBasisFunction{T, typeof(ψ), typeof(Dρ_ψ), typeof(Dρρ_ψ), typeof(∇θ_ψ)}(θ, ψ, Dρ_ψ, Dρρ_ψ, ∇θ_ψ)
+function Matern52_Dρψ(ρ::Real, θ::AbstractVector{<:Real})
+    l = θ[1]
+    c = sqrt(5.0) / l
+    s = c * ρ
+    # Derivative with respect to ρ: dψ/dρ = - (c * s * (1+s)/3)*exp(-s)
+    return -(c * s * (1 + s)/3) * exp(-s)
 end
 
 """
-Some common kernels of interest defined as required and passed to our generic
-constructor.
+    Matern52_Dρρψ(ρ, θ)
+
+Evaluate the second derivative of the Matern 5/2 kernel with respect to ρ.
 """
-function Matern52(θ=[1.])
-    function k(ρ, θ)
-        l = θ[1]
-        c = sqrt(5.0) / l
-        s = c*ρ
-        return (1+s*(1+s/3.0))*exp(-s)
-    end
-    return RadialBasisFunctionGeneric(k, θ)
+function Matern52_Dρρψ(ρ::Real, θ::AbstractVector{<:Real})
+    l = θ[1]
+    c = sqrt(5.0) / l
+    s = c * ρ
+    # Second derivative: d²ψ/dρ² = -(c^2)*exp(-s)*(1+s-s^2)/3
+    return -(c^2) * exp(-s) * (1 + s - s^2)/3
 end
 
-function Matern32(θ=[1.])
-    function k(ρ, θ)
-        l = θ[1]
-        c = sqrt(3.0) / l
-        s = c*ρ
-        return (1+s)*exp(-s)
-    end
-    return RadialBasisFunctionGeneric(k, θ)
+"""
+    Matern52_∇θψ(ρ, θ)
+
+Evaluate the gradient of the Matern 5/2 kernel with respect to its hyperparameters.
+Since only one hyperparameter (the length-scale) is present, this returns a one-element vector.
+"""
+function Matern52_∇θψ(G::AbstractVector{<:Real}, ρ::Real, θ::AbstractVector{<:Real})
+    l = θ[1]
+    c = sqrt(5.0) / l
+    s = c * ρ
+    # Compute ∂ψ/∂l as (s + s^2)*exp(-s)*(sqrt(5)*ρ)/(3*l^2)
+    G .= (s + s^2) * exp(-s) * (sqrt(5.0) * ρ) / (3 * l^2)
+    return G
 end
 
-function Matern12(θ=[1.])
-    function k(ρ, θ)
-        l = θ[1]
-        c = 1.0 / l
-        s = c*ρ
-        return exp(-s)
-    end
-    return RadialBasisFunctionGeneric(k, θ)
-end
+"""
+    Matern52(θ=[1.])
 
-function SquaredExponential(θ=[1.])
-    function k(ρ, θ)
-        l = θ[1]
-        return exp(-ρ^2/(2*l^2))
-    end
-    return RadialBasisFunctionGeneric(k, θ)
-end
-
-function Periodic(θ=[1., 1.])
-    function k(ρ, θ)
-        return exp(-2 * sin(pi * ρ / θ[2]) ^ 2 / θ[1] ^ 2)
-    end
-    return RadialBasisFunctionGeneric(k, θ)
+Construct a RadialBasisFunction representing the Matern 5/2 kernel using
+the analytic functions defined in `Matern52_ψ`, `Matern52_Dρψ`,
+`Matern52_Dρρψ`, and `Matern52_∇θψ`. The default hyperparameter vector is [1.].
+"""
+function Matern52(θ::AbstractVector{T} = [1.]) where T <: Real
+    n = length(θ)
+    static_θ = MVector{n}(θ)
+    return RadialBasisFunction{n,
+                               T,
+                               typeof(Matern52_ψ),
+                               typeof(Matern52_Dρψ),
+                               typeof(Matern52_Dρρψ),
+                               typeof(Matern52_∇θψ)}(
+        static_θ,
+        Matern52_ψ,
+        Matern52_Dρψ,
+        Matern52_Dρρψ,
+        Matern52_∇θψ
+    )
 end
 
 """
@@ -128,7 +130,7 @@ function eval_∇k(rbf::RadialBasisFunction, r::AbstractVector{T}) where T <: Re
         return 0*r
     end
     ∇ρ = r/ρ
-    return derivative(rbf)(ρ)*∇ρ
+    return derivative(rbf)(ρ, rbf.θ)*∇ρ
 end
 
 function eval_∇k!(rbf::RadialBasisFunction, r::AbstractVector{T}, ∇k::AbstractVector) where T <: Real
@@ -139,7 +141,7 @@ function eval_∇k!(rbf::RadialBasisFunction, r::AbstractVector{T}, ∇k::Abstra
             return ∇k
         end
         ∇ρ = r / ρ
-        ∇k[:] = derivative(rbf)(ρ) * ∇ρ
+        ∇k[:] = derivative(rbf)(ρ, rbf.θ) * ∇ρ
         return ∇k
     end
 end
@@ -148,33 +150,34 @@ function eval_Hk(rbf::RadialBasisFunction, r::Vector{T}) where T <: Real
     ρ = norm(r)
     if ρ > 0
         ∇ρ = r/ρ
-        Dψr = derivative(rbf)(ρ)/ρ
-        D2ψ = second_derivative(rbf)(ρ)
+        Dψr = derivative(rbf)(ρ, rbf.θ)/ρ
+        D2ψ = second_derivative(rbf)(ρ, rbf.θ)
         return (D2ψ-Dψr)*∇ρ*∇ρ' + Dψr*I
     end
-    return second_derivative(rbf)(ρ) * Matrix(I, length(r), length(r))
+    return second_derivative(rbf)(ρ, rbf.θ) * Matrix(I, length(r), length(r))
 end
 
 function eval_Hk!(rbf::RadialBasisFunction, r::AbstractVector{T}, Hk::AbstractMatrix{T}) where T <: Real
     @views begin
-        ρ = norm(r)
+        # ρ = norm(r)
+        ρ = sqrt(dot(r, r))
         if ρ > 0
             ∇ρ = r/ρ
-            Dψr = derivative(rbf)(ρ)/ρ
-            D2ψ = second_derivative(rbf)(ρ)
+            Dψr = derivative(rbf)(ρ, rbf.θ)/ρ
+            D2ψ = second_derivative(rbf)(ρ, rbf.θ)
             Hk[:, :] = (D2ψ-Dψr)*∇ρ*∇ρ' + Dψr*I
             return Hk
         end
-        Hk[:, :] = second_derivative(rbf)(ρ) * Matrix(I, length(r), length(r))
+        Hk[:, :] = second_derivative(rbf)(ρ, rbf.θ) * Matrix(I, length(r), length(r))
         return Hk
     end
 end
 
 function eval_KXX(rbf::RadialBasisFunction, X::AbstractMatrix{T}) where T <: Real
     d, N = size(X)
-    KXX = zeros(N, N)
+    KXX = zeros(Float64, N, N)
     ψ0 = rbf(0.0)
-    diff = zeros(T, d)
+    diff = zeros(Float64, d)
 
     @inbounds @views begin
         for j = 1:N
@@ -183,7 +186,8 @@ function eval_KXX(rbf::RadialBasisFunction, X::AbstractMatrix{T}) where T <: Rea
                 @simd for k=1:d
                     diff[k] = X[k, i] - X[k, j]
                 end
-                KXX[i,j] = rbf(norm(diff))
+                norm_diff = norm(diff)
+                KXX[i,j] = rbf(norm_diff)
                 KXX[j,i] = KXX[i, j]
             end
         end
@@ -193,7 +197,11 @@ function eval_KXX(rbf::RadialBasisFunction, X::AbstractMatrix{T}) where T <: Rea
 end
 (rbf::RadialBasisFunction)(X::AbstractMatrix{T}) where T <: Real = eval_KXX(rbf, X)
 
-function eval_KXX!(rbf::RadialBasisFunction, X::AbstractMatrix{T}, KXX::AbstractMatrix{T}, diff::AbstractVector{T}) where T <: Real
+function eval_KXX!(
+    rbf::RadialBasisFunction,
+    X::AbstractMatrix{T},
+    KXX::AbstractMatrix{T},
+    diff::S) where {T <: Real, S <: AbstractVector{Float64}}
     d, N = size(X)
     ψ0 = rbf(0.0)
 
@@ -204,7 +212,36 @@ function eval_KXX!(rbf::RadialBasisFunction, X::AbstractMatrix{T}, KXX::Abstract
                 @simd for k=1:d
                     diff[k] = X[k, i] - X[k, j]
                 end
-                KXX[i,j] = rbf(norm(diff))
+                # norm_diff = norm(diff)
+                norm_diff = sqrt(dot(diff, diff))
+                KXX[i,j] = rbf(norm_diff)
+                KXX[j,i] = KXX[i, j]
+            end
+        end
+    end
+
+    return KXX
+end
+
+function eval_KXX!(
+    rbf::RadialBasisFunction,
+    X::Matrix{Float64},
+    KXX::Matrix{Float64},
+    diff::Vector{Float64},
+    N::Int64)
+    d, N = size(X)
+    ψ0 = rbf(0.0)
+
+    @inbounds begin
+        for j = 1:N
+            KXX[j,j] = ψ0
+            for i = j+1:N
+                @simd for k=1:d
+                    diff[k] = X[k, i] - X[k, j]
+                end
+                # norm_diff = norm(diff)
+                norm_diff = sqrt(dot(diff, diff))
+                KXX[i,j] = rbf(norm_diff)
                 KXX[j,i] = KXX[i, j]
             end
         end
@@ -293,7 +330,8 @@ function eval_KxX!(
             @simd for k =1:d
                 diff[k] = x[k] - X[k, i]
             end
-            KxX[i] = rbf(norm(diff))
+            norm_diff = sqrt(dot(diff, diff))
+            KxX[i] = rbf(norm_diff)
         end
     end
 
@@ -313,7 +351,7 @@ function eval_∇KxX(rbf::RadialBasisFunction, x::AbstractVector{T}, X::Abstract
             # r = x-X[:,j]
             ρ = norm(diff)
             if ρ > 0
-                ∇KxX[:,j] = rbf.Dρ_ψ(ρ)*diff/ρ
+                ∇KxX[:,j] = rbf.Dρ_ψ(ρ, rbf.θ)*diff/ρ
             end
         end
     end
@@ -334,9 +372,10 @@ function eval_∇KxX!(
             @simd for k=1:d
                 diff[k] = x[k] - X[k, j]
             end
-            ρ = norm(diff)
+            norm_diff = sqrt(dot(diff, diff))
+            ρ = norm_diff
             if ρ > 0
-                ∇KxX[:,j] = rbf.Dρ_ψ(ρ)*diff/ρ
+                ∇KxX[:,j] = rbf.Dρ_ψ(ρ, rbf.θ)*diff/ρ
             end
         end
     end
@@ -388,8 +427,7 @@ function eval_δKXX!(
                     diff[k] = X[k, i] - X[k, j]
                     δdiff[k] = δX[k, i] - δX[k, j]
                 end
-                # δKij = eval_∇k!(rbf, diff, ∇k)' * (δdiff)
-                δKij = 1.
+                δKij = eval_∇k!(rbf, diff, ∇k)' * (δdiff)
                 δKXX[i,j] = δKij
                 δKXX[j,i] = δKij
             end
@@ -399,56 +437,13 @@ function eval_δKXX!(
     return δKXX
 end
 
-
-# function eval_δKxX(
-#     rbf::RadialBasisFunction,
-#     x::AbstractVector{T},
-#     X::AbstractMatrix{T},
-#     δX::AbstractMatrix{T}) where T <: Real
-#     d, N = size(X)
-#     δKxX = zeros(N)
-#     diff = zeros(T, d)
-
-#     @inbounds @views begin
-#         for j = 1:N
-#             @simd for k=1:d
-#                 diff[k] = x[k] - X[k, j]
-#             end
-#             δKxX[j] = eval_∇k(rbf, diff)' * (-δX[:,j])
-#         end
-#     end
-
-#     return δKxX
-# end
-
-# function eval_δ∇KxX(
-#     rbf::RadialBasisFunction,
-#     x::AbstractVector{T},
-#     X::AbstractMatrix{T},
-#     δX::AbstractMatrix{T}) where T <: Real
-#     d, N = size(X)
-#     δ∇KxX = zeros(d, N)
-#     diff = zeros(T, d)
-
-#     @views begin
-#         for j = 1:N
-#             @simd for k=1:d
-#                 diff[k] = x[k] - X[k, j]
-#             end
-#             δ∇KxX[:,j] = eval_Hk(rbf, diff) * (-δX[:,j])
-#         end
-#     end
-
-#     return δ∇KxX
-# end
-
 function eval_Dθ_KXX(
     rbf::RadialBasisFunction,
     X::AbstractMatrix{T},
     δθ::AbstractVector{T}) where T <: Real
     d, N = size(X)
     δKXX = zeros(N, N)
-    δψ0 = rbf.∇θ_ψ(0.0)' * δθ
+    δψ0 = rbf.∇θ_ψ!(0.0)' * δθ
     diff = zeros(T, d)
 
     @views begin
@@ -458,7 +453,8 @@ function eval_Dθ_KXX(
                 @simd for k=1:d
                     diff[k] = X[k, i] - X[k, j]
                 end
-                δKij = rbf.∇θ_ψ(norm(diff))' * δθ
+                norm_diff = sqrt(dot(diff, diff))
+                δKij = rbf.∇θ_ψ!(norm_diff)' * δθ
                 δKXX[i,j] = δKij
                 δKXX[j,i] = δKij
             end
@@ -474,21 +470,25 @@ function eval_Dθ_KXX!(
     X::AbstractMatrix{T},
     δθ::AbstractVector{T},
     δKXX::AbstractMatrix{T},
-    diff::AbstractVector{T}) where T <: Real
-    d, N = size(X)
-    δψ0 = rbf.∇θ_ψ(0.0)' * δθ
-
+    diff::AbstractVector{T},
+    δψij::AbstractVector{T}) where T <: Real
     @views begin
+        d, N = size(X)
+        
         for j = 1:N
-            δKXX[j,j] = δψ0
+            δKXX[j, j] = dot(hypersgradient(rbf)(δψij, 0.0, rbf.θ), δθ)
+        end
+
+        for j = 1:N
             for i = j+1:N
                 @simd for k=1:d
                     diff[k] = X[k, i] - X[k, j]
                 end
-                δKij = rbf.∇θ_ψ(norm(diff))' * δθ
-                # δKij = 1.
+                norm_diff = sqrt(dot(diff, diff))
+
+                δKij = dot(hypersgradient(rbf)(δψij, norm_diff, rbf.θ),  δθ)
                 δKXX[i,j] = δKij
-                δKXX[j,i] = δKij
+                δKXX[j,i] = δKXX[i,j]
             end
         end
 

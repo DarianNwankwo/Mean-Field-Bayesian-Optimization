@@ -2,10 +2,10 @@ import Base:+, *, -
 # https://www.sfu.ca/~ssurjano/optimization.html
 # https://en.wikipedia.org/wiki/Test_functions_for_optimization
 
-struct TestFunction{F, G}
+struct TestFunction{F, G, N}
     dim::Int
-    bounds
-    xopt
+    bounds::Matrix{Float64}
+    xopt::NTuple{N, Vector{Float64}}
     f::F
     ∇f!::G
 end
@@ -109,8 +109,11 @@ function hshift(testfn::TestFunction, s::Vector{T}) where T <: Number
     return TestFunction(testfn.dim, testfn.bounds, testfn.xopt + s , f, ∇f)
 end
 
-get_bounds(t::TestFunction) = (t.bounds[:, 1], t.bounds[:, 2])
-
+function get_bounds(t::TestFunction)
+    @views begin
+        return (t.bounds[:, 1], t.bounds[:, 2])
+    end
+end
 
 function tplot(f::TestFunction)
     if f.dim == 1
@@ -143,11 +146,10 @@ function TestLevy(d)
         return G
     end
 
-    dim = d
     bounds = zeros(d, 2)
     bounds[:, 1] .= -10.
     bounds[:, 2] .= 10.
-    xopt = (ones(Float64, d),)  # Tuple containing the optimal vector
+    xopt = Tuple([ones(Float64, d)])  # Tuple containing the optimal vector
 
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
@@ -168,7 +170,7 @@ function TestBraninHoo(; a=1, b=5.1/(4π^2), c=5/π, r=6, s=10, t=1/(8π))
         return G
     end
     bounds = [-5.0 10.0 ; 0.0 15.0]
-    xopt = ([-π, 12.275], [π, 2.275], [9.42478, 2.475])
+    xopt = Tuple([[-π, 12.275], [π, 2.275], [9.42478, 2.475]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -180,7 +182,7 @@ function TestRosenbrock()
         G[2] = 200*(xy[2]-xy[1]^2)
         return G
     end
-    return TestFunction(2, [-2.0 2.0 ; -1.0 3.0 ], (ones(2),), f, ∇f!)
+    return TestFunction(2, [-2.0 2.0 ; -1.0 3.0 ], Tuple([ones(2)]), f, ∇f!)
 end
 
 
@@ -209,7 +211,7 @@ function TestRastrigin(n)
         bounds[i, 2] = 5.12
     end
 
-    xopt = (zeros(n),)
+    xopt = Tuple([zeros(n)])
     return TestFunction(n, bounds, xopt, f, ∇f!)
 end
 
@@ -257,7 +259,7 @@ function TestAckley(d; a=20.0, b=0.2, c=2π)
     bounds = zeros(d,2)
     bounds[:,1] .= -32.768
     bounds[:,2] .=  32.768
-    xopt = (zeros(d),)
+    xopt = Tuple([zeros(d)])
 
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
@@ -284,7 +286,7 @@ function TestSixHump()
     end
 
     # There's a symmetric optimum
-    xopt = ([0.089842, -0.712656], [-0.089842, 0.712656])
+    xopt = Tuple([[0.089842, -0.712656], [-0.089842, 0.712656]])
 
     return TestFunction(2, [-3.0 3.0 ; -2.0 2.0], xopt, f, ∇f!)
 end
@@ -299,7 +301,7 @@ function TestGramacyLee()
     bounds = zeros(1, 2)
     bounds[1,1] = 0.5
     bounds[1,2] = 2.5
-    xopt=([0.548563],)
+    xopt = Tuple([[0.548563]])
     return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
@@ -342,7 +344,7 @@ function TestGoldsteinPrice()
     bounds[:,1] .= -2.0
     bounds[:,2] .=  2.0
 
-    xopt = ([0.0, -1.0],)
+    xopt = Tuple([[0.0, -1.0]])
 
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
@@ -377,7 +379,7 @@ function TestBeale()
     bounds[:,1] .= -4.5
     bounds[:,2] .=  4.5
 
-    xopt = ([3.0, 0.5],)
+    xopt = Tuple([[3.0, 0.5]])
 
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
@@ -403,7 +405,7 @@ function TestEasom()
     bounds[:, 1] .= -100.0
     bounds[:, 2] .= 100.0
     
-    xopt=([π, π],)
+    xopt = Tuple([[π, π]])
 
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
@@ -434,7 +436,7 @@ function TestStyblinskiTang(d)
         bounds[i, 2] = 5.0
     end
 
-    xopt = (repeat([-2.903534], d),)
+    xopt = Tuple([repeat([-2.903534], d)])
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
@@ -465,20 +467,10 @@ function TestBukinN6()
     bounds = zeros(2, 2)
     bounds[:,1] .= -15.0
     bounds[:,2] .=  3.0
-    xopt = ([-10.0, 1.0],)
+    xopt = Tuple([[-10.0, 1.0]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
-
-# function TestCrossInTray()
-#     f(x) = -0.0001 * (abs(sin(x[1]) * sin(x[2]) * exp(abs(100 - sqrt(x[1]^2 + x[2]^2) / π))) + 1)^0.1
-#     ∇f(x) = zeros(2) # TODO
-#     bounds = zeros(2, 2)
-#     bounds[:,1] .= -10.0
-#     bounds[:,2] .=  10.0
-#     xopt = (repeat([1.34941], 2),)
-#     return TestFunction(2, bounds, xopt, f, ∇f)
-# end
 
 function TestCrossInTray()
     f(x) = -0.0001 * (abs(sin(x[1]) * sin(x[2]) * exp(abs(100 - sqrt(x[1]^2 + x[2]^2) / π))) + 1)^0.1
@@ -527,7 +519,7 @@ function TestCrossInTray()
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .=  10.0
-    xopt = (repeat([1.34941], 2),)
+    xopt = Tuple([repeat([1.34941], 2)])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -568,7 +560,7 @@ function TestEggHolder()
     bounds = zeros(2, 2)
     bounds[:,1] .= -512.0
     bounds[:,2] .=  512.0
-    xopt = ([512, 404.2319],)
+    xopt = Tuple([[512, 404.2319]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -617,7 +609,7 @@ function TestHolderTable()
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .=  10.0
-    xopt = ([8.05502, 9.66459],)
+    xopt = Tuple([[8.05502, 9.66459]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -643,7 +635,7 @@ function TestSchwefel(d)
     bounds = zeros(d, 2)
     bounds[:,1] .= -500.0
     bounds[:,2] .=  500.0
-    xopt = (repeat([420.9687], d),)
+    xopt = Tuple([repeat([420.9687], d)])
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
@@ -680,7 +672,7 @@ function TestLevyN13()
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .= 10.0
-    xopt = ([1, 1],)
+    xopt = Tuple([[1, 1]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -709,7 +701,7 @@ function TestTrid(d)
     bounds = zeros(d, 2)
     bounds[:,1] .= -d^2
     bounds[:,2] .=  d^2
-    xopt = ([i * (d + 1 - i) for i in 1:d],)
+    xopt = Tuple([[i * (d + 1 - i) for i in 1:d]])
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
@@ -726,7 +718,7 @@ function TestMccormick()
     bounds = zeros(2, 2)
     bounds[:,1] .= -1.5
     bounds[:,2] .= 4.0
-    xopt = ([-0.54719, -1.54719],)
+    xopt = Tuple([[-0.54719, -1.54719]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -776,7 +768,7 @@ function TestHartmann3D()
     bounds = zeros(3, 2)
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
-    xopt = ([0.114614, 0.555649, 0.852547],)
+    xopt = Tuple([[0.114614, 0.555649, 0.852547]])
     return TestFunction(3, bounds, xopt, f, ∇f!)
 end
 
@@ -847,7 +839,7 @@ function TestHartmann4D()
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
     # Known reference optimum in 4D (still uses only the first 4 coords)
-    xopt = ([0.20169, 0.150011, 0.476874, 0.275332],)
+    xopt = Tuple([[0.20169, 0.150011, 0.476874, 0.275332]])
 
     return TestFunction(4, bounds, xopt, f, ∇f!)
 end
@@ -906,7 +898,7 @@ function TestHartmann6D()
     bounds = zeros(6, 2)
     bounds[:,1] .= 0.0
     bounds[:,2] .= 1.0
-    xopt = ([0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573],)
+    xopt = Tuple([[0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573]])
     return TestFunction(6, bounds, xopt, f, ∇f!)
 end
 
@@ -917,7 +909,7 @@ function TestConstant(n=0.; lbs::Vector{<:T}, ubs::Vector{<:T}) where T <: Real
         fill!(G, 0.)
         return G
     end
-    xopt = (zeros(length(lbs)),)
+    xopt = Tuple([zeros(length(lbs))])
     bounds = hcat(lbs, ubs)
     return TestFunction(length(lbs), bounds, xopt, f, ∇f!)
 end
@@ -929,7 +921,7 @@ function TestQuadratic1D(a=1, b=0, c=0; lb=-1.0, ub=1.0)
         G[1] = 2*a*first(x) + b
     end
     bounds = [lb ub]
-    xopt = (zeros(1),)
+    xopt = Tuple([zeros(1)])
     return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
@@ -944,7 +936,7 @@ function TestLinearCosine1D(a=1, b=1; lb=-1.0, ub=1.0)
         return G
     end
     bounds = [lb ub]
-    xopt = (zeros(1),) # TODO
+    xopt = Tuple([zeros(1)]) # TODO
     return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
@@ -987,7 +979,7 @@ function TestShekel()
     end
 
     bounds = [zeros(4) 10ones(4)]
-    xopt = ([4.0, 4.0, 4.0, 4.0],)
+    xopt = Tuple([[4.0, 4.0, 4.0, 4.0]])
     return TestFunction(4, bounds, xopt, f, ∇f!)
 end
 
@@ -1011,26 +1003,8 @@ function TestDropWave()
     bounds = zeros(2, 2)
     bounds[:,1] .= -5.12
     bounds[:,2] .=  5.12
-    xopt = ([0.0, 0.0],)
+    xopt = Tuple([[0.0, 0.0]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
-end
-
-
-function TestGriewank(d)
-    f(x) = sum(x.^2) / 4000 - prod(cos.(x ./ sqrt.(collect(1:d)))) + 1
-    
-    function ∇f!(G, x)
-        for i in 1:d
-            G[i] = x[i] / 2000 + prod(cos.(x ./ sqrt.(collect(1:d)))) * sin(x[i] / sqrt(i))
-        end
-        return G
-    end
-
-    bounds = zeros(d, 2)
-    bounds[:,1] .= -600.0
-    bounds[:,2] .=  600.0
-    xopt = (zeros(d),)
-    return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
 
@@ -1046,7 +1020,7 @@ function TestBohachevsky()
     bounds = zeros(2, 2)
     bounds[:,1] .= -100.0
     bounds[:,2] .=  100.0
-    xopt = ([0.0, 0.0],)
+    xopt = Tuple([[0.0, 0.0]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
@@ -1074,7 +1048,7 @@ function TestGriewank(d)
     bounds = zeros(d, 2)
     bounds[:, 1] .= -600.
     bounds[:, 2] .= 600.
-    xopt = (zeros(d),)
+    xopt = Tuple([zeros(d)])
 
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end

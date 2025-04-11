@@ -161,6 +161,7 @@ function main()
     gaps = zeros(cli_args["budget"] + 1)
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
+    M = 64 # starts for optimization composed testfn + trend
 
     println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
@@ -169,6 +170,9 @@ function main()
         payload = testfn_payloads[testfn_name]
         testfn = payload.fn(payload.args...)
         spatial_lbs, spatial_ubs = get_bounds(testfn)
+        initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
+        minimizers = Vector{Vector{Float64}}(undef, M + 1)
+        f_minimums = Vector{Float64}(undef, M + 1)
 
         # Generate the initial starts for the inner optimizer
         inner_optimizer_starts = generate_initial_guesses(cli_args["starts"], spatial_lbs, spatial_ubs)
@@ -198,7 +202,13 @@ function main()
 
             for (i, trend) in enumerate(function_trends)
                 # Augment the testfn with a trend
-                tfn = function_trend_names[i] == "zero_trend" ? testfn : testfn + trend
+                tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(
+                    testfn,
+                    trend,
+                    initial_xs,
+                    minimizers,
+                    f_minimums
+                )
                 tft_name = function_trend_names[i]
 
                 minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
