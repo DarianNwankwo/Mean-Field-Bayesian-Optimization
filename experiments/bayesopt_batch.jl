@@ -158,67 +158,67 @@ function main()
 
     println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
-        try
-            println("Test Function Being Evaluated: $testfn_name")
-            # Exract the current test function from the batch of test functions
-            payload = testfn_payloads[testfn_name]
-            testfn = payload.fn(payload.args...)
-            spatial_lbs, spatial_ubs = get_bounds(testfn)
-            initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
-            minimizers = Vector{Vector{Float64}}(undef, M)
-            f_minimums = Vector{Float64}(undef, M)
-            hyper_minimizers = [Vector{Float64}(undef, hyper_dim) for _ in 1:S]
-            hyper_minimums = Vector{Float64}(undef, S)
-            xnext = zeros(testfn.dim)
+        println("Test Function Being Evaluated: $testfn_name")
+        # Exract the current test function from the batch of test functions
+        payload = testfn_payloads[testfn_name]
+        testfn = payload.fn(payload.args...)
+        spatial_lbs, spatial_ubs = get_bounds(testfn)
+        initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
+        minimizers = Vector{Vector{Float64}}(undef, M)
+        f_minimums = Vector{Float64}(undef, M)
+        hyper_minimizers = [Vector{Float64}(undef, hyper_dim) for _ in 1:S]
+        hyper_minimums = Vector{Float64}(undef, S)
+        xnext = zeros(testfn.dim)
 
-            # Generate the initial starts for the inner optimizer
-            inner_optimizer_starts = generate_initial_guesses(M - 2, spatial_lbs, spatial_ubs)
-            
-            # Generate surrogate and function trends to offset the test function with
-            surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
+        # Generate the initial starts for the inner optimizer
+        inner_optimizer_starts = generate_initial_guesses(M - 2, spatial_lbs, spatial_ubs)
+        
+        # Generate surrogate and function trends to offset the test function with
+        surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
 
-            # Initialize surrogates with preallocated memory to support the full BO loop
-            ios = initial_observation_sizes
-            surrogates = [
-                Surrogate(
-                    Matern52(), testfn.dim, cli_args["budget"] + ios[1], cli_args["observation-noise"]
-                ),
-                HybridSurrogate(
-                    Matern52(), surrogate_trends[2], testfn.dim, cli_args["budget"] + ios[2], cli_args["observation-noise"]
-                ),
-                HybridSurrogate(
-                    Matern52(), surrogate_trends[3], testfn.dim, cli_args["budget"] + ios[3], cli_args["observation-noise"]
-                ),
-                HybridSurrogate(
-                    Matern52(), surrogate_trends[4], testfn.dim, cli_args["budget"] + ios[4], cli_args["observation-noise"]
-                )
-            ]
+        # Initialize surrogates with preallocated memory to support the full BO loop
+        ios = initial_observation_sizes
+        surrogates = [
+            Surrogate(
+                Matern52(), testfn.dim, cli_args["budget"] + ios[1], cli_args["observation-noise"]
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[2], testfn.dim, cli_args["budget"] + ios[2], cli_args["observation-noise"]
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[3], testfn.dim, cli_args["budget"] + ios[3], cli_args["observation-noise"]
+            ),
+            HybridSurrogate(
+                Matern52(), surrogate_trends[4], testfn.dim, cli_args["budget"] + ios[4], cli_args["observation-noise"]
+            )
+        ]
 
-            for (i, trend) in enumerate(function_trends)
-                # Augment the testfn with a trend
-                tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(
-                    testfn,
-                    trend,
-                    initial_xs,
-                    minimizers,
-                    f_minimums
-                )
-                tft_name = function_trend_names[i]
+        for (i, trend) in enumerate(function_trends)
+            # Augment the testfn with a trend
+            tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(
+                testfn,
+                trend,
+                initial_xs,
+                minimizers,
+                f_minimums
+            )
+            tft_name = function_trend_names[i]
 
-                minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
-                write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
+            minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
+            write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
 
-                for (j, surrogate) in enumerate(surrogates)
-                    st_name = surrogate_trend_names[j]
+            for (j, surrogate) in enumerate(surrogates)
+                st_name = surrogate_trend_names[j]
 
-                    # Extract minimizer from testfunction
-                    actual_minimum = tfn(tfn.xopt[1])
-                    num_initial_observations = ios[j]
+                # Extract minimizer from testfunction
+                actual_minimum = tfn(tfn.xopt[1])
+                num_initial_observations = ios[j]
 
-                    # Construct path to directory maintaining current experiments data
-                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/EI/"
-                    
-                    println("Beginning Randomized Trials: ")
+                # Construct path to directory maintaining current experiments data
+                path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/EI/"
+                
+                println("Beginning Randomized Trials: ")
+                try
                     for trial in 1:cli_args["trials"]
                         print("$trial.) ")
                         # Gather initial design for our statistical model
@@ -267,15 +267,16 @@ function main()
                     end
                     println()
                     flush(stdout)
+                catch e
+                    err_dir = "$current_directory/data/$testfn_name"
+                    mkpath(err_dir)
+                    open("$err_dir/error.txt", "w+") do io
+                        println(io, "Trial #$(trial) Error: ", sprint(showerror, e, catch_backtrace()))
+                    end
                 end
             end
-        catch e
-            err_dir = "$current_directory/data/$testfn_name"
-            mkpath(err_dir)
-            open("$err_dir/error.txt", "w") do io
-                println(io, "Error: ", sprint(showerror, e, catch_backtrace()))
-            end
         end
+    
     end
 end
 
