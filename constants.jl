@@ -1,6 +1,6 @@
 const RANDOM_ACQUISITION = "Random"
 const DOUBLE = 2
-const JITTER = 1e-8
+const JITTER = 1e-6
 const NEWTON_SOLVE_TIME_LIMIT = .1
 const MAX_DIMENSION = 20
 const EI_VARIANCE_TOLERANCE = 1e-8
