@@ -1,24 +1,16 @@
 function base_solve(
-    surrogate::AbstractSurrogate;
+    surrogate::AbstractSurrogate,
+    decision_rule::AbstractDecisionRule,
     spatial_lbs::AbstractVector{T},
     spatial_ubs::AbstractVector{T},
     xstart::AbstractVector{T},
-    θfixed::AbstractVector{T}) where T <: Real
-
-    function fun(x)
-        surrogate_at_xθ = surrogate(x, θfixed)
-        return -eval(surrogate_at_xθ)
+    cache::SurrogateEvaluationCache) where T <: Real
+    fun(x) = -eval(surrogate, decision_rule, x, cache)
+    fun_grad!(g, x) = begin
+        g[:] = -eval_gradient(surrogate, decision_rule, x, cache) 
     end
-    
-    function fun_grad!(g, x)
-        surrogate_at_xθ = surrogate(x, θfixed)
-        g[:] = -gradient(surrogate_at_xθ)
-    end
-    
-    function fun_hess!(h, x)
-        surrogate_at_xθ = surrogate(x, θfixed)
-
-        h[:, :] .= -hessian(surrogate_at_xθ)
+    fun_hess!(h, x) = begin
+        h[:, :] = -eval_hessian(surrogate, decision_rule, x, cache)
     end
 
     df = TwiceDifferentiable(fun, fun_grad!, fun_hess!, xstart)
@@ -26,8 +18,8 @@ function base_solve(
     res = optimize(
         df, dfc, xstart, IPNewton(),
         Optim.Options(
-            x_tol=1e-3,
-            f_tol=1e-3,
+            x_tol=1e-4,
+            f_tol=1e-4,
             time_limit=NEWTON_SOLVE_TIME_LIMIT,
             outer_iterations=100,
             # iterations=20,
@@ -37,38 +29,82 @@ function base_solve(
     return Optim.minimizer(res), res
 end
 
+function base_solve_nlopt(
+    surrogate::AbstractSurrogate,
+    decision_rule::AbstractDecisionRule,
+    spatial_lbs::AbstractVector{T},
+    spatial_ubs::AbstractVector{T},
+    xstart::AbstractVector{T},
+    cache::SurrogateEvaluationCache
+) where T <: Real
+    n = length(xstart)
+    # opt = NLopt.Opt(:LD_SLSQP, n)
+    opt = NLopt.Opt(:LD_LBFGS, n)
+    
+    # Set the lower and upper bounds
+    lower_bounds!(opt, spatial_lbs)
+    upper_bounds!(opt, spatial_ubs)
+    
+    # Set stopping criteria
+    xtol_rel!(opt, 1e-4)
+    ftol_rel!(opt, 1e-4)
+    maxeval!(opt, 100)             # maximum number of evaluations/iterations
+    # Optionally, set a time limit if NEWTON_SOLVE_TIME_LIMIT is defined:
+    maxtime!(opt, NEWTON_SOLVE_TIME_LIMIT)
+    
+    # Define the objective callback.
+    # NLopt callbacks accept (x, grad) where:
+    # - x is the current iterate (Vector{T})
+    # - grad is an output vector (if nonempty) to be filled with gradient information.
+    function nlopt_obj(x, grad)
+        if length(grad) > 0
+            grad[:] = eval_gradient(surrogate, decision_rule, x, cache)
+        end
+        return eval(surrogate, decision_rule, x, cache)
+    end
+    
+    # nlopt_obj = wrap_gradient(decision_rule_functor(decision_rule, surrogate))
+    # Perform the optimization
+    NLopt.max_objective!(opt, nlopt_obj)
+    f_min, x_min, ret = NLopt.optimize(opt, xstart)
+    
+    # Return the minimizer and a tuple with more detailed results (x_min, function value, and termination code)
+    # return x_min, (x_min, f_min, ret)
+    return x_min, f_min
+end
+
 
 function multistart_base_solve!(
     surrogate::AbstractSurrogate,
-    xfinal::AbstractVector{T};
+    decision_rule::AbstractDecisionRule,
+    xfinal::AbstractVector{T},
     spatial_lbs::AbstractVector{T},
     spatial_ubs::AbstractVector{T},
     guesses::Matrix{T},
-    θfixed::AbstractVector{T},
+    cache::SurrogateEvaluationCache,
     minimizers_container::Vector{Vector{T}},
     minimums_container::AbstractVector{T}) where T <: Real
-    if get_name(get_decision_rule(surrogate)) == "Random"
-        xfinal[:] = spatial_lbs .+ (spatial_ubs .- spatial_lbs) .* rand(length(spatial_lbs))
-        return nothing
-    end
-    candidates = []
+    # if get_name(get_decision_rule(surrogate)) == "Random"
+    #     xfinal[:] = spatial_lbs .+ (spatial_ubs .- spatial_lbs) .* rand(length(spatial_lbs))
+    #     return nothing
+    # end
+
     M = size(guesses, 2)    
     for i in 1:size(guesses, 2)
-        minimizer, res = base_solve(
+        minimizer, f_min = base_solve_nlopt(
             surrogate,
-            spatial_lbs=spatial_lbs,
-            spatial_ubs=spatial_ubs,
-            xstart=guesses[:, i],
-            θfixed=θfixed
+            decision_rule,
+            spatial_lbs,
+            spatial_ubs,
+            guesses[:, i],
+            cache
         )
         minimizers_container[i] = minimizer
-        minimums_container[i] = minimum(res)
+        minimums_container[i] = f_min
     end
     
-    candidates = [(minimizers_container[i], minimums_container[i]) for i in 1:M]
-    candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
-    mini, j_mini = findmin(pair -> pair[2], candidates)
-    xfinal[:] = candidates[j_mini][1]
+    idx = argmin(minimums_container)
+    xfinal[:] = minimizers_container[idx]
 
     return nothing
 end

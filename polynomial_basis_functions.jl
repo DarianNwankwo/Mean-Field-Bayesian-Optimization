@@ -9,43 +9,28 @@ This struct encapsulates the basis functions and provides gradients and Hessians
 - `basis_gradients::G`: A tuple of functions representing the gradients of the basis functions.
 - `basis_hessians::H`: A tuple of functions representing the Hessians of the basis functions.
 """
-struct PolynomialBasisFunction{N, F<:NTuple{N, Function}, G<:NTuple{N, Function}, H<:NTuple{N, Function}} <: ParametricRepresentation
-    basis_functions::F
-    basis_gradients::G
-    basis_hessians::H
+struct PolynomialBasisFunction <: ParametricRepresentation
+    basis_functions::NTuple{N, Function} where N
+    basis_gradients::NTuple{N, Function} where N
+    basis_hessians::NTuple{N, Function} where N
 end
 
 function PolynomialBasisFunction(basis_functions::NTuple{N, Function}) where {N}
-    basis_gradients = ntuple(i -> x -> ForwardDiff.gradient(basis_functions[i], x), N)
-    basis_hessians  = ntuple(i -> x -> ForwardDiff.hessian(basis_functions[i], x), N)
-    return PolynomialBasisFunction{
-        N,
-        typeof(basis_functions),
-        typeof(basis_gradients),
-        typeof(basis_hessians)
-    }(
+    basis_gradients = ntuple(i -> (g, x) -> begin
+        g .= ForwardDiff.gradient(basis_functions[i], x)
+        return g
+    end, N)
+    basis_hessians  = ntuple(i -> (H, x) -> begin
+        H .= ForwardDiff.hessian(basis_functions[i], x)
+        return H
+    end, N)
+    return PolynomialBasisFunction(
         basis_functions,
         basis_gradients,
         basis_hessians
     )
 end
 
-function PolynomialBasisFunction(
-    basis_functions::NTuple{N, Function},
-    basis_gradients::NTuple{N, Function},
-    basis_hessians::NTuple{N, Function}
-) where {N}
-    return PolynomialBasisFunction{
-      N,
-      typeof(basis_functions),
-      typeof(basis_gradients),
-      typeof(basis_hessians)
-    }(
-        basis_functions,
-        basis_gradients,
-        basis_hessians
-    )
-end
 
 get_basis_functions(pbf::PolynomialBasisFunction) = pbf.basis_functions
 get_basis_gradients(pbf::PolynomialBasisFunction) = pbf.basis_gradients
@@ -66,18 +51,15 @@ function eval_basis(pbf::PolynomialBasisFunction, x::AbstractVector{T}) where T 
 end
 
 # function eval_basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::AbstractMatrix{T}) where T <: Real
-function eval_basis!(pbf::PolynomialBasisFunction{N, F, G, H}, x::AbstractVector{T}, out::AbstractMatrix{T}) where {N, F, G, H, T <: Real}
-    # basis_functions = get_basis_functions(pbf)
-    
+function eval_basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::AbstractMatrix{T}) where T <: Real    
     @views begin
         for i in 1:length(pbf)
             bf = pbf.basis_functions[i]
             out[1, i] = bf(x)
-            # out[1, i] = pbf.basis_functions[i](x)
         end
     end
 
-    return nothing
+    return out
 end
 
 function eval_basis(pbf::PolynomialBasisFunction, X::AbstractMatrix{T}) where T <: Real
@@ -105,7 +87,7 @@ function eval_basis!(pbf::PolynomialBasisFunction, X::AbstractMatrix{T}, out::Ab
         end
     end
 
-    return nothing
+    return out
 end
 
 function eval_∇basis(pbf::PolynomialBasisFunction, x::AbstractVector{T}) where T <: Real
@@ -127,7 +109,7 @@ function eval_∇basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out:
         pbf.basis_gradients[i]((@view out[:, i]), x)
     end
 
-    return nothing
+    return out
 end
 
 function eval_Hbasis(pbf::PolynomialBasisFunction, x::AbstractVector{T}) where T <: Real
@@ -149,7 +131,7 @@ function eval_Hbasis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::A
         pbf.basis_hessians[k]((@view out[:, :, 1, k]), x)
     end
 
-    return nothing
+    return out
 end
 
 (pbf::PolynomialBasisFunction)(x::AbstractVector{T}) where T <: Real = eval_basis(pbf, x)

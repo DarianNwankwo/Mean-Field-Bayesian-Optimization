@@ -2,7 +2,8 @@ const RANDOM_ACQUISITION = "Random"
 const DOUBLE = 2
 const JITTER = 1e-8
 const NEWTON_SOLVE_TIME_LIMIT = .1
-const MAX_DIMENSION = 30
+const MAX_DIMENSION = 20
+const EI_VARIANCE_TOLERANCE = 1e-8
 
 """
 The amount of space to allocate for our surrogate model in terms of the number of 
@@ -21,7 +22,7 @@ macro generate_linear_phi(dim)
     dim_val = Base.eval(@__MODULE__, dim)
     for j in 1:dim_val
         fname = Symbol("linear_phi_", j)
-        @eval $(fname)(x) = x[$j]
+        @eval $(fname)(x::AbstractVector{T}) where {T <: Real} = x[$j]
     end
     return nothing
 end
@@ -31,7 +32,7 @@ macro generate_∇linear_phi(dim)
     dim_val = Base.eval(@__MODULE__, dim)
     for j in 1:dim_val
         fname = Symbol("∇linear_phi_", j, "!")
-        @eval $(fname)(G, x) = (fill!(G, 0.0); G[$j] = 1.0; return G)
+        @eval $(fname)(G::AbstractVector{T}, x::AbstractVector{T}) where {T <: Real} = (fill!(G, 0.0); G[$j] = 1.0; return G)
     end
     return nothing
 end
@@ -41,7 +42,7 @@ macro generate_Hlinear_phi(dim)
     dim_val = Base.eval(@__MODULE__, dim)
     for j in 1:dim_val
         fname = Symbol("Hlinear_phi_", j, "!")
-        @eval $(fname)(H, x) = (fill!(H, 0.0); return H)
+        @eval $(fname)(H::AbstractMatrix{T}, x::AbstractVector{T}) where {T <: Real} = (fill!(H, 0.0); return H)
     end
     return nothing
 end
@@ -90,12 +91,23 @@ Hϕ_constant!(H, x) = begin
     return H    
 end
 
-ϕ_quadratic(x) = dot(x, x)
-∇ϕ_quadratic!(g, x) = begin
+
+ϕ_quadratic(x::AbstractVector{<:Real}) = dot(x, x)
+function ∇ϕ_quadratic!(g::AbstractVector{T}, x::AbstractVector{T}) where T <: Real
     g .= 2. * x
     return g
 end
-Hϕ_quadratic!(H, x) = begin
+function Hϕ_quadratic!(H::AbstractMatrix{T}, x::AbstractVector{T}) where T <: Real
     H .= 2.
-    return g
+    return H
+end
+
+
+function normal_pdf(mean::Real, variance::Real)
+    return (1. / sqrt(2pi * variance))  * exp(-mean^2 / (2 * variance))
+end
+
+
+function normal_cdf(mean::Real, variance::Real)
+    return 1. / 2. * (1. + erf(mean / sqrt(2variance)))
 end

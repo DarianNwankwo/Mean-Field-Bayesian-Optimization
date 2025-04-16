@@ -361,7 +361,7 @@ function write_global_minimizer_to_disk(path_prefix, testfn::TestFunction)
     end
 end
 
-function to(n; key="MB")
+function bto(n; key="MB")
     mapping = Dict("KB" => 1, "MB" => 2, "GB" => 3)
     factor = mapping[key]
     conversion = n / (1024 ^ mapping[key])

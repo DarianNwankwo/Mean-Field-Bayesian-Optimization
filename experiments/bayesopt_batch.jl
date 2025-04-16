@@ -19,7 +19,7 @@ function parse_command_line(args)
         "--starts"
             action = :store_arg
             help = "Number of random starts for solving the acquisition function (default: 64)"
-            default = 64
+            default = 256
             arg_type = Int
         "--kernel-starts"
             action = :store_arg
@@ -29,12 +29,12 @@ function parse_command_line(args)
         "--trials"
             action = :store_arg
             help = "Number of trials with a different initial start (default: 50)"
-            default = 50
+            default = 60
             arg_type = Int
         "--budget"
             action = :store_arg
             help = "Maximum budget for bayesian optimization (default: 200)"
-            default = 200
+            default = 100
             arg_type = Int
         "--function-names"
             action = :store_arg
@@ -47,7 +47,7 @@ function parse_command_line(args)
             action = :store_arg
             help = "Noise variance of the observations"
             arg_type = Float64
-            default = 0.
+            default = 1e-6
     end
 
     parsed_args = parse_args(args, parser)
@@ -134,71 +134,65 @@ function main()
 
     # Create trend.txt metadata and other metric files for each surrogate
     filenames = ["gaps.csv", "simple_regrets.csv", "observations.csv", "minimum_observations.csv"]
-    # Each acquisition function will have metrics associated with them
-    # acquisition_functions = [EI(), POI(), LCB()]
-    acquisition_functions = [EI()]
-    acquisition_function_names = [string(af) for af in acquisition_functions]
 
     # Create directory to store payload for given test function
     filepath_mappings = Dict()
     for testfn_name in testfn_names
         fpm = create_directory_structure(
-            testfn_name, function_trend_names, surrogate_trend_names, filenames, acquisition_function_names
+            testfn_name, function_trend_names, surrogate_trend_names, filenames, ["EI"]
         )
         filepath_mappings[testfn_name] = fpm[testfn_name]
     end
-
-    # Create CSVs for each metric we care to maintain
-    metrics_to_collect = ["gaps", "simple_regret"]
 
     # Get current filepath
     current_directory = dirname(@__FILE__)
 
     # Surrogate hyperparameters
     kernel_lbs, kernel_ubs = [.1], [5.]
-    decision_rule_hyperparameters = [0.]
-    hyperparameter_optimizer_starts = generate_initial_guesses(cli_args["kernel-starts"], kernel_lbs, kernel_ubs)
+    hyperparameter_optimizer_starts = generate_initial_guesses(cli_args["kernel-starts"] - 2, kernel_lbs, kernel_ubs)
+    hyper_dim, S = size(hyperparameter_optimizer_starts)
     gaps = zeros(cli_args["budget"] + 1)
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
-    M = 64 # starts for optimization composed testfn + trend
+    M = cli_args["starts"] # starts for optimization composed testfn + trend
 
     println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
-        # println("Test Function Being Evaluated: $testfn_name")
-        # Exract the current test function from the batch of test functions
-        payload = testfn_payloads[testfn_name]
-        testfn = payload.fn(payload.args...)
-        spatial_lbs, spatial_ubs = get_bounds(testfn)
-        initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
-        minimizers = Vector{Vector{Float64}}(undef, M + 1)
-        f_minimums = Vector{Float64}(undef, M + 1)
+        try
+            println("Test Function Being Evaluated: $testfn_name")
+            # Exract the current test function from the batch of test functions
+            payload = testfn_payloads[testfn_name]
+            testfn = payload.fn(payload.args...)
+            spatial_lbs, spatial_ubs = get_bounds(testfn)
+            initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
+            minimizers = Vector{Vector{Float64}}(undef, M)
+            f_minimums = Vector{Float64}(undef, M)
+            hyper_minimizers = [Vector{Float64}(undef, hyper_dim) for _ in 1:S]
+            hyper_minimums = Vector{Float64}(undef, S)
+            xnext = zeros(testfn.dim)
 
-        # Generate the initial starts for the inner optimizer
-        inner_optimizer_starts = generate_initial_guesses(cli_args["starts"], spatial_lbs, spatial_ubs)
-        
-        # Generate surrogate and function trends to offset the test function with
-        surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
+            # Generate the initial starts for the inner optimizer
+            inner_optimizer_starts = generate_initial_guesses(M - 2, spatial_lbs, spatial_ubs)
+            
+            # Generate surrogate and function trends to offset the test function with
+            surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
 
-        # Initialize surrogates with preallocated memory to support the full BO loop
-        ios = initial_observation_sizes
-        surrogates = [
-            Surrogate(
-                Matern52(), testfn.dim, cli_args["budget"] + ios[1], EI(), cli_args["observation-noise"]
-            ),
-            # HybridSurrogate(
-            #     Matern52(), surrogate_trends[2], testfn.dim, cli_args["budget"] + ios[2], EI(), cli_args["observation-noise"]
-            # ),
-            # HybridSurrogate(
-            #     Matern52(), surrogate_trends[3], testfn.dim, cli_args["budget"] + ios[3], EI(), cli_args["observation-noise"]
-            # ),
-            # HybridSurrogate(
-            #     Matern52(), surrogate_trends[4], testfn.dim, cli_args["budget"] + ios[4], EI(), cli_args["observation-noise"]
-            # )
-        ]
-
-        for (k, af) in enumerate(acquisition_functions)
-            af_name = acquisition_function_names[k]
+            # Initialize surrogates with preallocated memory to support the full BO loop
+            ios = initial_observation_sizes
+            surrogates = [
+                Surrogate(
+                    Matern52(), testfn.dim, cli_args["budget"] + ios[1], cli_args["observation-noise"]
+                ),
+                HybridSurrogate(
+                    Matern52(), surrogate_trends[2], testfn.dim, cli_args["budget"] + ios[2], cli_args["observation-noise"]
+                ),
+                HybridSurrogate(
+                    Matern52(), surrogate_trends[3], testfn.dim, cli_args["budget"] + ios[3], cli_args["observation-noise"]
+                ),
+                HybridSurrogate(
+                    Matern52(), surrogate_trends[4], testfn.dim, cli_args["budget"] + ios[4], cli_args["observation-noise"]
+                )
+            ]
 
             for (i, trend) in enumerate(function_trends)
                 # Augment the testfn with a trend
@@ -215,7 +209,6 @@ function main()
                 write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
 
                 for (j, surrogate) in enumerate(surrogates)
-                    set_decision_rule!(surrogate, af)
                     st_name = surrogate_trend_names[j]
 
                     # Extract minimizer from testfunction
@@ -223,14 +216,18 @@ function main()
                     num_initial_observations = ios[j]
 
                     # Construct path to directory maintaining current experiments data
-                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$af_name/"
-
+                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/EI/"
+                    
                     println("Beginning Randomized Trials: ")
                     for trial in 1:cli_args["trials"]
-                        
+                        print("$trial.) ")
                         # Gather initial design for our statistical model
                         Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
                         yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
+                        new_ei = ExpectedImprovement(
+                            minimum(yinit),
+                            0.
+                        )
                         
                         # Set the correct entries in the preallocated surrogate
                         set!(surrogate, Xinit, yinit)
@@ -238,15 +235,20 @@ function main()
                         # Perform Bayesian optimization loop
                         surrogate = bayesian_optimize!(
                             surrogate,
+                            new_ei,
                             tfn,
                             spatial_lbs,
                             spatial_ubs,
                             kernel_lbs,
                             kernel_ubs,
-                            decision_rule_hyperparameters,
                             inner_optimizer_starts,
                             hyperparameter_optimizer_starts,
-                            cli_args["budget"]
+                            cli_args["budget"],
+                            minimizers,
+                            f_minimums,
+                            hyper_minimizers,
+                            hyper_minimums,
+                            xnext
                         )
 
                         # Extract performance metrics
@@ -263,8 +265,15 @@ function main()
 
                         # ProgressMeter.next!(progress)
                     end
+                    println()
                     flush(stdout)
                 end
+            end
+        catch e
+            err_dir = "$current_directory/data/$testfn_name"
+            mkpath(err_dir)
+            open("$err_dir/error.txt", "w") do io
+                println(io, "Error: ", sprint(showerror, e, catch_backtrace()))
             end
         end
     end

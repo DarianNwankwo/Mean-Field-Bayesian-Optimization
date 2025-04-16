@@ -30,10 +30,10 @@ function gradient(pt::PolynomialTrend, x::AbstractVector{T}) where T <: Real
     eval_∇basis!(
         pt.ϕ,
         x,
-        (@view pt.containers.∇px[:, :])
+        (@view pt.containers.grad_px[:, :])
     )
     # println("pt.containers.∇px = $(pt.containers.∇px)")
-    return pt.containers.∇px[:, :] * pt.coefficients
+    return pt.containers.grad_px[:, :] * pt.coefficients
 end
 
 # ------------------------------------------------------------------------
@@ -60,8 +60,8 @@ end
 # Define a barrier type that holds the composite function along with fixed function pointers.
 struct TestFunctionBarrier
     data::CompositeFunction
-    fptr::Function   # Fixed pointer to composite_f
-    ∇fptr::Function  # Fixed pointer to composite_∇f!
+    fptr::F where F <: Function   # Fixed pointer to composite_f
+    ∇fptr::G where G <: Function # Fixed pointer to composite_∇f!
 end
 
 # Make the barrier callable (so it can be used in place of a plain function).
@@ -74,61 +74,7 @@ function ∇f!(grad, x, tfb::TestFunctionBarrier)
     return tfb.∇fptr(grad, x, tfb.data)
 end
 
-# function +(testfn::TestFunction, pt::PolynomialTrend)
-#     # grad = zeros(testfn.dim)
-#     function new_f(x)
-#         term1 = testfn.f(x)
-#         term2 = pt(x)
-#         return term1 + term2
-#     end
 
-#     function new_∇f!(grad, x)
-#         return testfn.∇f!(grad, x) + gradient(pt, x)
-#     end
-
-#     # The global minimizer is subject to shifting, so we find the global minimizer
-#     # algorithmically.
-#     M = 64
-#     lbs, ubs = get_bounds(testfn)
-#     initial_xs = randsample(M, testfn.dim, lbs, ubs)
-#     inner_optimizer = LBFGS()
-#     minimizers = Vector{Vector{Float64}}(undef, M + 1)
-#     f_minimums = Vector{Float64}(undef, M + 1)
-
-    
-#     # I should just used the projected gradient function here too
-#     candidates = []
-#     # @sync @threads for i in 1:M
-#     for i in 1:M
-#         # print("$i-")
-#         results = optimize(
-#             new_f,
-#             new_∇f!,
-#             lbs,
-#             ubs,
-#             initial_xs[:, i],
-#             Fminbox(inner_optimizer),
-#             Optim.Options(x_tol=1e-3, f_tol=1e-3, time_limit=.1)
-#         )
-#         # minimizer, f_minimum = projected_gradient_descent(f, g!, initial_xs[:, i], lbs, ubs)
-#         minimizers[i] = Optim.minimizer(results)
-#         f_minimums[i] = Optim.minimum(results)
-#     end
-#     candidates = [(minimizers[i], f_minimums[i]) for i in 1:M]
-#     push!(candidates, (testfn.xopt[1], testfn(testfn.xopt[1])))
-
-#     candidates = filter(pair -> !any(isnan.(pair[1])), candidates)
-#     mini, j_mini = findmin(pair -> pair[2], candidates)
-#     xopt = candidates[j_mini][1]
-    
-#     return TestFunction(
-#         testfn.dim,
-#         testfn.bounds,
-#         Tuple([xopt]),
-#         new_f,
-#         new_∇f!
-#     )
-# end
 # ------------------------------------------------------------------------
 # Finally, create a composition function to combine an arbitrary TestFunction and PolynomialTrend.
 # This serves as a replacement for operator+.
@@ -150,7 +96,7 @@ function plus(
 
     for i in 1:M-1
         # print("$i-")
-        results = optimize(
+        results = Optim.optimize(
             barrier,
             ∇barrier!,
             lbs,
