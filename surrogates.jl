@@ -5,6 +5,7 @@ get_observations(afs::AbstractSurrogate) = afs.y
 get_coefficients(afs::AbstractSurrogate) = afs.d
 get_cholesky(as::AbstractSurrogate) = as.L
 get_covariance(as::AbstractSurrogate) = as.K
+get_covariance_scratchpad(as::AbstractSurrogate) = as.Kscratch
 get_capacity(s::AbstractSurrogate) = s.capacity
 increment!(s::AbstractSurrogate) = s.observed += 1
 get_observed(s::AbstractSurrogate) = s.observed
@@ -12,6 +13,7 @@ is_full(s::AbstractSurrogate) = get_observed(s) == get_capacity(s)
 get_active_covariates(s::AbstractSurrogate) = @view get_covariates(s)[:, 1:get_observed(s)]
 get_active_cholesky(s::AbstractSurrogate) = @view get_cholesky(s)[1:get_observed(s), 1:get_observed(s)]
 get_active_covariance(s::AbstractSurrogate) = @view get_covariance(s)[1:get_observed(s), 1:get_observed(s)]
+get_active_covariance_scratchpad(s::AbstractSurrogate) = @view get_covariance_scratchpad(s)[1:get_observed(s), 1:get_observed(s)]
 get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_observed(s)]
 get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
 get_observation_noise(s::AbstractSurrogate) = s.observation_noise
@@ -37,6 +39,7 @@ mutable struct HybridSurrogate{RBF<:StationaryKernel,PBF<:ParametricRepresentati
     X::Matrix{Float64} # Covariates
     P::Matrix{Float64} # Parametric term design matrix
     K::Matrix{Float64} # Covariance matrix for Gaussian process
+    Kscratch::Matrix{Float64}
     L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
     y::Vector{Float64}
     d::Vector{Float64} # Coefficients for Gaussian process
@@ -56,6 +59,7 @@ mutable struct Surrogate{RBF<:StationaryKernel} <: AbstractSurrogate
     ψ::RBF
     X::Matrix{Float64}
     K::Matrix{Float64}
+    Kscratch::Matrix{Float64}
     L::LowerTriangular{Float64,Matrix{Float64}}
     # L::Matrix{Float64}
     y::Vector{Float64}
@@ -139,6 +143,7 @@ function HybridSurrogate(
     observation_noise::T=1e-6) where {T<:Real}
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     dim, N = size(X)
+    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
 
     """
     Preallocate a matrix for covariates of size d x capacity where capacity is the maximum
@@ -159,8 +164,25 @@ function HybridSurrogate(
     Preallocate a covariance matrix of size d x capacity
     """
     preallocated_K = zeros(capacity, capacity)
-    KXX = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
-    preallocated_K[1:N, 1:N] = KXX
+    preallocated_Kscratch = zeros(capacity, capacity)
+    # KXX = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
+    # preallocated_K[1:N, 1:N] = KXX
+    eval_KXX!(
+        ψ,
+        X,
+        (@view preallocated_Kscratch[1:N, 1:N]),
+        containers.diff_x
+    )
+    eval_KXX!(
+        ψ,
+        X,
+        (@view preallocated_K[1:N, 1:N]),
+        containers.diff_x
+    )
+    for jj in 1:N
+        preallocated_Kscratch[jj, jj] +=  (JITTER + observation_noise)
+        preallocated_K[jj, jj] +=  (JITTER + observation_noise)
+    end
 
     """
     Preallocate a matrix for the cholesky factorization of size d x capacity
@@ -176,7 +198,11 @@ function HybridSurrogate(
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    d, λ = coefficient_solve(KXX, PX, y)
+    d, λ = coefficient_solve(
+        (@view preallocated_K[1:N, 1:N]),
+        PX,
+        y
+    )
 
     preallocated_d = zeros(capacity)
     preallocated_d[1:length(d)] = d
@@ -189,14 +215,13 @@ function HybridSurrogate(
 
     observed = length(y)
 
-    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
-
     return HybridSurrogate(
         ψ,
         ϕ,
         preallocated_X,
         preallocated_P,
         preallocated_K,
+        preallocated_Kscratch,
         preallocated_L,
         preallocated_y,
         preallocated_d,
@@ -218,6 +243,7 @@ function HybridSurrogate(
     preallocated_X = zeros(dim, capacity)
     preallocated_P = zeros(capacity, length(ϕ))
     preallocated_K = zeros(capacity, capacity)
+    preallocated_Kscratch = zeros(capacity, capacity)
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
     # preallocated_L = zeros(capacity, capacity)
     preallocated_d = zeros(capacity)
@@ -232,6 +258,7 @@ function HybridSurrogate(
         preallocated_X,
         preallocated_P,
         preallocated_K,
+        preallocated_Kscratch,
         preallocated_L,
         preallocated_y,
         preallocated_d,
@@ -251,12 +278,31 @@ function Surrogate(
     observation_noise::T=1e-6) where {T<:Real}
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     d, N = size(X)
+    containers = PreallocatedContainers(1, d, capacity, length(ψ))
 
     preallocated_X = zeros(d, capacity)
     preallocated_X[:, 1:N] = X
 
     preallocated_K = zeros(capacity, capacity)
-    preallocated_K[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
+    preallocated_Kscratch = zeros(capacity, capacity)
+    # preallocated_Kscratch[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
+    eval_KXX!(
+        ψ,
+        X,
+        (@view preallocated_Kscratch[1:N, 1:N]),
+        containers.diff_x
+    )
+    # preallocated_K[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
+    eval_KXX!(
+        ψ,
+        X,
+        (@view preallocated_K[1:N, 1:N]),
+        containers.diff_x
+    )
+    for jj in 1:N
+        preallocated_Kscratch[jj, jj] +=  (JITTER + observation_noise)
+        preallocated_K[jj, jj] +=  (JITTER + observation_noise)
+    end
 
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
     # preallocated_L = zeros(capacity, capacity)
@@ -274,12 +320,11 @@ function Surrogate(
     preallocated_y = zeros(capacity)
     preallocated_y[1:N] = y
 
-    containers = PreallocatedContainers(1, d, capacity, length(ψ))
-
     return Surrogate(
         ψ,
         preallocated_X,
         preallocated_K,
+        preallocated_Kscratch,
         preallocated_L,
         preallocated_y,
         preallocated_d,
@@ -297,6 +342,7 @@ function Surrogate(
     observation_noise::T=1e-6) where {T<:Real}
     preallocated_X = zeros(dim, capacity)
     preallocated_K = zeros(capacity, capacity)
+    preallocated_Kscratch = zeros(capacity, capacity)
     preallocated_L = LowerTriangular(zeros(capacity, capacity))
     # preallocated_L = zeros(capacity, capacity)
     preallocated_d = zeros(capacity)
@@ -308,6 +354,7 @@ function Surrogate(
         ψ,
         preallocated_X,
         preallocated_K,
+        preallocated_Kscratch,
         preallocated_L,
         preallocated_y,
         preallocated_d,
@@ -351,7 +398,10 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
                 s.K[jj, jj] += (JITTER + observation_noise)
             end
         end
-        # s.K[1:N, 1:N] += (JITTER + observation_noise) * I
+        @timeit to "Scratchpad Assignment" copyto!(
+            get_active_covariance_scratchpad(s),
+            get_active_covariance(s)
+        )
         @timeit to "Compute Cholesky" F = cholesky(Hermitian(get_active_covariance(s)))
         @timeit to "Set Kernel Cholesky" s.L[1:N, 1:N] .= F.L
         # @timeit to "Kernel Solve" s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
@@ -469,7 +519,6 @@ function resize(s::HybridSurrogate)
         get_covariates(s),
         get_observations(s),
         get_capacity(s) * DOUBLE,
-        get_decision_rule(s),
         get_observation_noise(s)
     )
 end
@@ -481,7 +530,6 @@ function resize(s::Surrogate)
         get_covariates(s),
         get_observations(s),
         get_capacity(s) * DOUBLE,
-        get_decision_rule(s),
         get_observation_noise(s)
     )
 end

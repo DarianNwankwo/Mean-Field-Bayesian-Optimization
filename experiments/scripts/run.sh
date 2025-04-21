@@ -3,21 +3,21 @@
 # Experimental configuration
 RANDOM_SEED=1906
 RANDOM_RESTARTS=256
-NUMBER_OF_TRIALS=2
-BAYESIAN_OPTIMIZATION_LOOP_BUDGET=2
+NUMBER_OF_TRIALS=50
+BAYESIAN_OPTIMIZATION_LOOP_BUDGET=100
 SHOULD_OPTIMIZE=1
 
 # Array of test function names
 function_names=(
-  "rastrigin4d"
-  "ackley2d"
-  "ackley8d"
-  "rosenbrock"
-  "sixhump"
-  "braninhoo"
-  "goldsteinprice"
-  "styblinskitang10d"
-  "schwefel4d"
+  # "rastrigin4d"
+  # "ackley2d"
+  # "ackley8d"
+  # "rosenbrock"
+  # "sixhump"
+  # "braninhoo"
+  # "goldsteinprice"
+  # "styblinskitang10d"
+  # "schwefel4d"
   "trid4d"
   "mccormick"
   "hartmann6d"
@@ -42,7 +42,7 @@ for fn in "${function_names[@]}"; do
     end=$(date +%s.%N)
     elapsed=$(echo "$end - $start" | bc)
     echo "$fn: $elapsed seconds" > "timing_$fn.txt"
-  ) &
+  ) # &
 done
 
 wait

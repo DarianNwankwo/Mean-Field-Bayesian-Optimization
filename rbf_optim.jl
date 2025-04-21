@@ -58,7 +58,7 @@ function base_solve_nlopt(
     # - grad is an output vector (if nonempty) to be filled with gradient information.
     function nlopt_obj(x, grad)
         if length(grad) > 0
-            grad[:] = eval_gradient(surrogate, decision_rule, x, cache)
+            grad .= eval_gradient(surrogate, decision_rule, x, cache)
         end
         return eval(surrogate, decision_rule, x, cache)
     end
@@ -69,7 +69,6 @@ function base_solve_nlopt(
     f_min, x_min, ret = NLopt.optimize(opt, xstart)
     
     # Return the minimizer and a tuple with more detailed results (x_min, function value, and termination code)
-    # return x_min, (x_min, f_min, ret)
     return x_min, f_min
 end
 
@@ -91,7 +90,7 @@ function multistart_base_solve!(
 
     M = size(guesses, 2)    
     for i in 1:size(guesses, 2)
-        minimizer, f_min = base_solve_nlopt(
+        @timeit to "Base Solve NLopt" minimizer, f_min = base_solve_nlopt(
             surrogate,
             decision_rule,
             spatial_lbs,
@@ -100,7 +99,7 @@ function multistart_base_solve!(
             cache
         )
         minimizers_container[i] = minimizer
-        minimums_container[i] = f_min
+        minimums_container[i] = -f_min
     end
     
     idx = argmin(minimums_container)

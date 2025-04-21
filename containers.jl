@@ -21,6 +21,7 @@ struct PreallocatedContainers
     Hf::Matrix{Float64} # Fixed sized intermediate container
     Hz::Matrix{Float64}
     zz::Matrix{Float64} # Fixed size
+    chol_workspace::Matrix{Float64}
 end
 
 function PreallocatedContainers(
@@ -51,6 +52,7 @@ function PreallocatedContainers(
         zeros(Float64, hypers_length),
         zeros(Float64, dim, dim),
         zeros(Float64, dim, dim),
-        zeros(Float64, m, m)
+        zeros(Float64, m, m),
+        zeros(Float64, max_obs, max_obs)
     )
 end

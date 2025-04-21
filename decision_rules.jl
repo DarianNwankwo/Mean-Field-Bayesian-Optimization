@@ -64,7 +64,6 @@ set_minimum!(dr::ExpectedImprovement, mm::Float64) = dr.minimum = mm
     return μbar * Distributions.normcdf(z) + m.σ * Distributions.normpdf(z)
 end
 
-
 @inline function eval_gradient(
     s::AbstractSurrogate,
     ei::ExpectedImprovement,

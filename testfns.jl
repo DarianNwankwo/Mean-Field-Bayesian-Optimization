@@ -701,7 +701,7 @@ function TestTrid(d)
     bounds = zeros(d, 2)
     bounds[:,1] .= -d^2
     bounds[:,2] .=  d^2
-    xopt = Tuple([[i * (d + 1 - i) for i in 1:d]])
+    xopt = Tuple([[i * (d + 1. - i) for i in 1:d]])
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
 
