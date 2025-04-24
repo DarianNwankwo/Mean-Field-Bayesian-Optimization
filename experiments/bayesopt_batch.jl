@@ -134,12 +134,19 @@ function main()
 
     # Create trend.txt metadata and other metric files for each surrogate
     filenames = ["gaps.csv", "simple_regrets.csv", "observations.csv", "minimum_observations.csv"]
+    strategies = [
+        ExpectedImprovement(),
+        ProbabilityOfImprovement(),
+        UpperConfidenceBound(2.),
+        RandomSampler()
+    ]
+    strategy_names = [get_name(strategy) for strategy in strategies]
 
     # Create directory to store payload for given test function
     filepath_mappings = Dict()
     for testfn_name in testfn_names
         fpm = create_directory_structure(
-            testfn_name, function_trend_names, surrogate_trend_names, filenames, ["EI"]
+            testfn_name, function_trend_names, surrogate_trend_names, filenames, strategy_names
         )
         filepath_mappings[testfn_name] = fpm[testfn_name]
     end
@@ -149,8 +156,6 @@ function main()
 
     # Surrogate hyperparameters
     kernel_lbs, kernel_ubs = [.1], [5.]
-    hyperparameter_optimizer_starts = generate_initial_guesses(cli_args["kernel-starts"] - 2, kernel_lbs, kernel_ubs)
-    hyper_dim, S = size(hyperparameter_optimizer_starts)
     gaps = zeros(cli_args["budget"] + 1)
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
@@ -195,13 +200,7 @@ function main()
 
         for (i, trend) in enumerate(function_trends)
             # Augment the testfn with a trend
-            tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(
-                testfn,
-                trend,
-                initial_xs,
-                minimizers,
-                f_minimums
-            )
+            tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
             tft_name = function_trend_names[i]
 
             minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
@@ -241,14 +240,10 @@ function main()
                             spatial_ubs,
                             kernel_lbs,
                             kernel_ubs,
-                            inner_optimizer_starts,
-                            hyperparameter_optimizer_starts,
                             cli_args["budget"],
-                            minimizers,
-                            f_minimums,
-                            hyper_minimizers,
-                            hyper_minimums,
-                            xnext
+                            xnext,
+                            cli_args["starts"],
+                            cli_args["kernel-starts"]
                         )
 
                         # Extract performance metrics
