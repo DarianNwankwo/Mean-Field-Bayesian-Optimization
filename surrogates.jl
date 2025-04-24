@@ -55,21 +55,6 @@ get_active_parametric_basis_matrix(s::HybridSurrogate) = @view get_parametric_ba
 get_parametric_basis_function(s::HybridSurrogate) = s.ϕ
 get_parametric_component_coefficients(afs::HybridSurrogate) = afs.λ
 
-mutable struct Surrogate{RBF<:StationaryKernel} <: AbstractSurrogate
-    ψ::RBF
-    X::Matrix{Float64}
-    K::Matrix{Float64}
-    Kscratch::Matrix{Float64}
-    L::LowerTriangular{Float64,Matrix{Float64}}
-    # L::Matrix{Float64}
-    y::Vector{Float64}
-    d::Vector{Float64}
-    observation_noise::Float64
-    observed::Int
-    capacity::Int
-    containers::PreallocatedContainers
-end
-
 
 # Define the custom show method for Surrogate
 function Base.show(io::IO, s::HybridSurrogate{RBF}) where {RBF}
@@ -143,42 +128,30 @@ function HybridSurrogate(
     observation_noise::T=1e-6) where {T<:Real}
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     dim, N = size(X)
-    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
+    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ))
 
     """
     Preallocate a matrix for covariates of size d x capacity where capacity is the maximum
     number of observations.
     """
-    preallocated_X = zeros(dim, capacity)
+    preallocated_X = zeros(T, dim, capacity)
     preallocated_X[:, 1:N] = X
 
     """
     Preallocate a matrix for the matrix that represents the polynomial basis evaluation of 
     our observations of size capacity x m where m is the dimensionality of our basis vector.
     """
-    preallocated_P = zeros(capacity, length(ϕ))
+    preallocated_P = zeros(T, capacity, length(ϕ))
     eval_basis!(ϕ, X, (@view preallocated_P[1:N, 1:length(ϕ)]))
     PX = preallocated_P[1:N, 1:length(ϕ)]
 
     """
     Preallocate a covariance matrix of size d x capacity
     """
-    preallocated_K = zeros(capacity, capacity)
-    preallocated_Kscratch = zeros(capacity, capacity)
-    # KXX = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
-    # preallocated_K[1:N, 1:N] = KXX
-    eval_KXX!(
-        ψ,
-        X,
-        (@view preallocated_Kscratch[1:N, 1:N]),
-        containers.diff_x
-    )
-    eval_KXX!(
-        ψ,
-        X,
-        (@view preallocated_K[1:N, 1:N]),
-        containers.diff_x
-    )
+    preallocated_K = zeros(T, capacity, capacity)
+    preallocated_Kscratch = zeros(T, capacity, capacity)
+    eval_KXX!(ψ, X, (@view preallocated_Kscratch[1:N, 1:N]), containers.diff_x)
+    eval_KXX!(ψ, X, (@view preallocated_K[1:N, 1:N]), containers.diff_x)
     for jj in 1:N
         preallocated_Kscratch[jj, jj] +=  (JITTER + observation_noise)
         preallocated_K[jj, jj] +=  (JITTER + observation_noise)
@@ -187,7 +160,7 @@ function HybridSurrogate(
     """
     Preallocate a matrix for the cholesky factorization of size d x capacity
     """
-    preallocated_L = LowerTriangular(zeros(capacity, capacity))
+    preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
     preallocated_L[1:N, 1:N] = cholesky(
         Hermitian(
             preallocated_K[1:N, 1:N]
@@ -198,19 +171,15 @@ function HybridSurrogate(
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    d, λ = coefficient_solve(
-        (@view preallocated_K[1:N, 1:N]),
-        PX,
-        y
-    )
+    d, λ = coefficient_solve((@view preallocated_K[1:N, 1:N]), PX, y)
 
-    preallocated_d = zeros(capacity)
+    preallocated_d = zeros(T, capacity)
     preallocated_d[1:length(d)] = d
 
-    λ_polynomial = zeros(length(λ))
+    λ_polynomial = zeros(T, length(λ))
     λ_polynomial[:] = λ
 
-    preallocated_y = zeros(capacity)
+    preallocated_y = zeros(T, capacity)
     preallocated_y[1:N] = y
 
     observed = length(y)
@@ -240,17 +209,17 @@ function HybridSurrogate(
     dim::Int,
     capacity::Int=DEFAULT_CAPACITY,
     observation_noise::T=1e-6) where {T<:Real}
-    preallocated_X = zeros(dim, capacity)
-    preallocated_P = zeros(capacity, length(ϕ))
-    preallocated_K = zeros(capacity, capacity)
-    preallocated_Kscratch = zeros(capacity, capacity)
-    preallocated_L = LowerTriangular(zeros(capacity, capacity))
+    preallocated_X = zeros(T, dim, capacity)
+    preallocated_P = zeros(T, capacity, length(ϕ))
+    preallocated_K = zeros(T, capacity, capacity)
+    preallocated_Kscratch = zeros(T, capacity, capacity)
+    preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
     # preallocated_L = zeros(capacity, capacity)
-    preallocated_d = zeros(capacity)
-    λ_polynomial = zeros(length(ϕ))
-    preallocated_y = zeros(capacity)
+    preallocated_d = zeros(T, capacity)
+    λ_polynomial = zeros(T, length(ϕ))
+    preallocated_y = zeros(T, capacity)
     observed = 0
-    containers = PreallocatedContainers(length(ϕ), dim, capacity, length(ψ))
+    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ))
 
     return HybridSurrogate(
         ψ,
@@ -270,54 +239,54 @@ function HybridSurrogate(
     )
 end
 
+mutable struct Surrogate{RBF<:StationaryKernel, PM <: ElasticPDMat} <: AbstractSurrogate
+    ψ::RBF
+    X::Matrix{Float64}
+    K::Matrix{Float64}
+    Kscratch::Matrix{Float64}
+    L::PM
+    y::Vector{Float64}
+    d::Vector{Float64}
+    observation_noise::Float64
+    observed::Int
+    capacity::Int
+    containers::PreallocatedContainers
+end
+
 function Surrogate(
     ψ::RadialBasisFunction,
     X::Matrix{T},
     y::Vector{T},
     capacity::Int=DEFAULT_CAPACITY,
-    observation_noise::T=1e-6) where {T<:Real}
+    observation_noise::T=1e-6) where T <: Real
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     d, N = size(X)
-    containers = PreallocatedContainers(1, d, capacity, length(ψ))
+    UNUSED_NUMBER_OF_BASIS_FUNCTIONS = 1
+    containers = PreallocatedContainers{T}(
+        UNUSED_NUMBER_OF_BASIS_FUNCTIONS,
+        d,
+        capacity,
+        length(ψ)
+    )
 
-    preallocated_X = zeros(d, capacity)
+    preallocated_X = zeros(T, d, capacity)
     preallocated_X[:, 1:N] = X
 
-    preallocated_K = zeros(capacity, capacity)
-    preallocated_Kscratch = zeros(capacity, capacity)
-    # preallocated_Kscratch[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
-    eval_KXX!(
-        ψ,
-        X,
-        (@view preallocated_Kscratch[1:N, 1:N]),
-        containers.diff_x
-    )
-    # preallocated_K[1:N, 1:N] = eval_KXX(ψ, X) + (JITTER + observation_noise) * I
-    eval_KXX!(
-        ψ,
-        X,
-        (@view preallocated_K[1:N, 1:N]),
-        containers.diff_x
-    )
+    preallocated_K = zeros(T, capacity, capacity)
+    preallocated_Kscratch = zeros(T, capacity, capacity)
+    eval_KXX!(ψ, X, (@view preallocated_Kscratch[1:N, 1:N]), containers.diff_x)
+    eval_KXX!(ψ, X, (@view preallocated_K[1:N, 1:N]), containers.diff_x)
     for jj in 1:N
         preallocated_Kscratch[jj, jj] +=  (JITTER + observation_noise)
         preallocated_K[jj, jj] +=  (JITTER + observation_noise)
     end
 
-    preallocated_L = LowerTriangular(zeros(capacity, capacity))
-    # preallocated_L = zeros(capacity, capacity)
-    preallocated_L[1:N, 1:N] = LowerTriangular(
-        cholesky(
-            Hermitian(
-                preallocated_K[1:N, 1:N]
-            )
-        ).L
-    )
+    preallocated_L = ElasticPDMat((@view preallocated_Kscratch[1:N, 1:N]), capacity=capacity)
+    preallocated_d = zeros(T, capacity)
+    # preallocated_d[1:N] = preallocated_L[1:N, 1:N]' \ (preallocated_L[1:N, 1:N] \ y)
+    preallocated_d[1:N] = preallocated_L \ y
 
-    preallocated_d = zeros(capacity)
-    preallocated_d[1:N] = preallocated_L[1:N, 1:N]' \ (preallocated_L[1:N, 1:N] \ y)
-
-    preallocated_y = zeros(capacity)
+    preallocated_y = zeros(T, capacity)
     preallocated_y[1:N] = y
 
     return Surrogate(
@@ -339,16 +308,21 @@ function Surrogate(
     ψ::RadialBasisFunction,
     dim::Int,
     capacity::Int=DEFAULT_CAPACITY,
-    observation_noise::T=1e-6) where {T<:Real}
-    preallocated_X = zeros(dim, capacity)
-    preallocated_K = zeros(capacity, capacity)
-    preallocated_Kscratch = zeros(capacity, capacity)
-    preallocated_L = LowerTriangular(zeros(capacity, capacity))
-    # preallocated_L = zeros(capacity, capacity)
-    preallocated_d = zeros(capacity)
-    preallocated_y = zeros(capacity)
+    observation_noise::T=1e-6) where T <: Real
+    preallocated_X = zeros(T, dim, capacity)
+    preallocated_K = zeros(T, capacity, capacity)
+    preallocated_Kscratch = zeros(T, capacity, capacity)
+    preallocated_L = ElasticPDMat(capacity=capacity)
+    preallocated_d = zeros(T, capacity)
+    preallocated_y = zeros(T, capacity)
+    UNUSED_NUMBER_OF_BASIS_FUNCTIONS = 1
 
-    containers = PreallocatedContainers(1, dim, capacity, length(ψ))
+    containers = PreallocatedContainers{T}(
+        UNUSED_NUMBER_OF_BASIS_FUNCTIONS,
+        dim,
+        capacity,
+        length(ψ)
+    )
 
     return Surrogate(
         ψ,
@@ -365,7 +339,6 @@ function Surrogate(
     )
 end
 
-
 get_active_KxX(s::AbstractSurrogate) = @view s.containers.KxX[1:get_observed(s)]
 get_active_grad_KxX(s::AbstractSurrogate) = @view s.containers.grad_KxX[:, 1:get_observed(s)]
 get_active_δKXX(s::AbstractSurrogate) = @view s.containers.δKXX[1:get_observed(s), 1:get_observed(s)]
@@ -379,34 +352,39 @@ get_grad_px(s::HybridSurrogate) = @view s.containers.grad_px[:, :]
 get_zz(s::HybridSurrogate) = @view s.containers.zz[:, :]
 
 
-"""
-When the kernel is changed, we need to update d, K, and L
-"""
 function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
+    # println("Factors Before: ", view(s.L.chol).factors)
     @views begin
         N = get_observed(s)
         s.ψ = kernel
         observation_noise = get_observation_noise(s)
+        # Grab the buffer and update inplace
+        @timeit to "Assign Buffer" Kbuffer = s.L.mat
         @timeit to "Set Kernel KXX" eval_KXX!(
             kernel,
             get_active_covariates(s),
-            get_active_covariance(s),
+            Kbuffer,
             get_diff_x(s)
         )
-        @timeit to "Jitter Diag" begin
-            for jj in 1:N
-                s.K[jj, jj] += (JITTER + observation_noise)
-            end
-        end
-        @timeit to "Scratchpad Assignment" copyto!(
-            get_active_covariance_scratchpad(s),
-            get_active_covariance(s)
+        copyto!(
+            s.K[1:N, 1:N],
+            Kbuffer
         )
-        @timeit to "Compute Cholesky" F = cholesky(Hermitian(get_active_covariance(s)))
-        @timeit to "Set Kernel Cholesky" s.L[1:N, 1:N] .= F.L
-        # @timeit to "Kernel Solve" s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ get_active_observations(s))
-        @timeit to "Kernel Solve" s.d[1:N] = F \ get_active_observations(s)
+        # Ensures PSDness
+        @timeit to "Jitter Diag" for jj in 1:N Kbuffer[jj, jj] += (JITTER + observation_noise) end
+        @timeit to "Scratchpad Assignment" copyto!(
+            view(s.L.chol).factors,
+            Kbuffer
+        )
+        @timeit to "Compute Cholesky" cholesky!(Symmetric(view(s.L.chol).factors))
+        # cholesky!(view(s.L.chol).factors)
+        # s.d[1:N] = s.L \ get_active_observations(s)
+        # s.L \ get_active_observations(s)
+        @timeit to "Copy Observations" yc = copy(get_active_observations(s))
+        @timeit to "Inplace Coefficient Solve" ldiv!(s.L, yc)
+        @timeit to "Assign Coefficient Solve" s.d[1:N] .= yc
     end
+    # println("Factors After: ", view(s.L.chol).factors)
 end
 
 function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
@@ -456,17 +434,22 @@ function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
             get_kernel(s),
             get_active_covariates(s),
             get_active_covariance(s),
-            s.containers.diff_x
+            get_diff_x(s)
         )
-        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
-        s.L[1:N, 1:N] = LowerTriangular(
-            cholesky(
-                Hermitian(
-                    get_active_covariance(s)
-                )
-            ).L
+        # Ensures PDSness
+        for jj in 1:N
+            get_active_covariance(s)[jj, jj] += (JITTER + observation_noise)
+        end
+        copyto!(s.Kscratch[1:N, 1:N], get_active_covariance(s))
+        # Grab the active covariance and write a copy of the covariance matrix
+        # tin our buffer o it
+        s.L = ElasticPDMat(
+            convert(Matrix, s.Kscratch[1:N, 1:N]),
+            capacity=s.capacity
         )
-        s.d[1:N] = s.L[1:N, 1:N]' \ (s.L[1:N, 1:N] \ y)
+        yc = copy(y)
+        ldiv!(s.L, yc)
+        s.d[1:N] = yc
         s.y[1:N] = y
     end
 end
@@ -523,7 +506,6 @@ function resize(s::HybridSurrogate)
     )
 end
 
-
 function resize(s::Surrogate)
     return Surrogate(
         get_kernel(s),
@@ -533,6 +515,7 @@ function resize(s::Surrogate)
         get_observation_noise(s)
     )
 end
+
 
 
 function insert!(s::AbstractSurrogate, x::Vector{T}, y::T) where {T<:Real}
@@ -561,6 +544,28 @@ function update_covariance!(s::AbstractSurrogate, x::Vector{T}) where {T<:Real}
         )
         s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
     end
+end
+
+function update_covariance!(s::Surrogate, x::Vector{T}) where {T<:Real}
+    @views begin
+        update_index = get_observed(s)
+        active_X = get_covariates(s)[:, 1:update_index-1]
+        kernel = get_kernel(s)
+
+        # Update the main diagonal
+        s.K[update_index, update_index] = kernel(0.0) + get_observation_noise(s) + JITTER
+        # Update the rows and columns with covariance vector formed from k(x, X)
+        # s.K[update_index, 1:update_index-1] = eval_KxX(kernel, x, active_X)'
+        eval_KxX!(
+            kernel,
+            x,
+            active_X,
+            s.K[update_index, 1:update_index-1],
+            s.containers.KxX
+        )
+        s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
+    end
+    append!(s.L, vec(s.K[1:update_index, update_index]))
 end
 
 function update_cholesky!(s::AbstractSurrogate)
@@ -595,11 +600,13 @@ function update_coefficients!(s::HybridSurrogate)
     end
 end
 
+
 function update_coefficients!(s::Surrogate)
     update_index = get_observed(s)
     @views begin
-        L = s.L[1:update_index, 1:update_index]
-        s.d[1:update_index] = L' \ (L \ s.y[1:update_index])
+        # L = s.L[1:update_index, 1:update_index]
+        # s.d[1:update_index] = L' \ (L \ s.y[1:update_index])
+        s.d[1:update_index] = s.L \ s.y[1:update_index]
     end
 end
 
@@ -638,7 +645,7 @@ function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where {T<:Real}
     insert!(s, xnew, ynew)
     increment!(s)
     update_covariance!(s, xnew)
-    update_cholesky!(s)
+    # update_cholesky!(s)
     update_coefficients!(s)
     return s
 end
@@ -696,6 +703,7 @@ function predictive_std(s::HybridSurrogate, x::AbstractVector{<:Real})
     zz = get_zz(s)
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
+    # TODO: Maybe don't form this linear system explicitly
     A = [zz P';
          P K]
     w = A \ v
@@ -738,7 +746,8 @@ function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
         get_active_grad_KxX(s),
         get_diff_x(s)
     )
-    A = [s.containers.zz P';
+    zz = get_zz(s)
+    A = [zz P';
          P K]
     ∇v = hcat(∇px, ∇kx)
     w = A \ v
@@ -771,7 +780,6 @@ function predictive_mean_gradient(s::Surrogate, x::AbstractVector{<:Real})
 end
 
 function predictive_std(s::Surrogate, x::AbstractVector{<:Real})
-    L = get_active_cholesky(s)
     k0 = get_kernel(s)(0.)
     kx = eval_KxX!(
         get_kernel(s),
@@ -780,7 +788,8 @@ function predictive_std(s::Surrogate, x::AbstractVector{<:Real})
         get_active_KxX(s),
         get_diff_x(s)
     )
-    w = L' \ (L \ kx)
+    w = copy(kx)
+    ldiv!(s.L, w)
     return sqrt(k0 - dot(kx, w))
 end
 
@@ -800,13 +809,13 @@ function predictive_std_gradient(s::Surrogate, x::AbstractVector{<:Real})
         get_diff_x(s)
     )
     σ = predictive_std(s, x)
-    L = get_active_cholesky(s)
-    w = L' \ (L \ kx)
+    w = copy(kx)
+    ldiv!(s.L, w)
     return -(∇kx * w) / σ
 end
 
-compute_moments(s::AbstractSurrogate, x::AbstractVector{<:Real}) = (predictive_mean(s, x), predictive_std(s, x))
-compute_moments_gradient(s::AbstractSurrogate, x::AbstractVector{<:Real}) = (predictive_mean_gradient(s, x), predictive_std_gradient(s, x))
+compute_moments(s::AbstractSurrogate, x) = (predictive_mean(s, x), predictive_std(s, x))
+compute_moments_gradient(s::AbstractSurrogate, x) = (predictive_mean_gradient(s, x), predictive_std_gradient(s, x))
 
 
 # ------------------------------------------------------------------
@@ -831,12 +840,13 @@ function log_likelihood(s::HybridSurrogate)
     return -dot(yz, dλ) / 2 - n * log(2π) / 2 - ladM
 end
 
+
 function log_likelihood(s::Surrogate)
     n = get_observed(s)
     y = get_active_observations(s)
     c = get_active_coefficients(s)
-    L = get_active_cholesky(s)
-    return -y' * c / 2 - sum(log.(diag(L))) - n * log(2π) / 2
+    L = s.L
+    return -(y' * c) / 2 - logdet(L) / 2 - (n * log(2π) / 2)
 end
 
 
@@ -844,9 +854,7 @@ function optimize!(
     s::AbstractSurrogate;
     lowerbounds::Vector{T},
     upperbounds::Vector{T},
-    starts::Matrix{T},
-    minimizers_container::Vector{Vector{T}},
-    minimums_container::Vector{T}) where T <: Real
+    restarts::Int = 32) where T
     n = length(lowerbounds)
     # opt = NLopt.Opt(:LD_SLSQP, n)
     opt = NLopt.Opt(:LD_LBFGS, n)
@@ -870,17 +878,21 @@ function optimize!(
         @timeit to "Log Likelihood" res = log_likelihood(s)
         return res
     end
+    
+    maxf = -Inf
+    maxθ = lowerbounds
+    seq = ScaledLHSIterator(lowerbounds, upperbounds, restarts)
 
-    M = size(starts, 2)
-    for i in 1:M
+    for θ in seq
         NLopt.max_objective!(opt, nlopt_obj)
-        @timeit to "NLopt Hypers" f_min, x_min, ret = NLopt.optimize(opt, starts[:, i])
-        minimizers_container[i] = x_min
-        minimums_container[i] = f_min
+        @timeit to "NLopt Hypers" f_max, θ_max, ret = NLopt.optimize(
+            opt, convert(Vector, θ)
+        )
+        if f_max > maxf
+            maxf = f_max
+            maxθ = θ_max
+        end
     end
-    idx = argmax(minimums_container)
-    θ = minimizers_container[idx]
-    set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
-
+    set_kernel!(s, set_hyperparameters!(get_kernel(s), maxθ))
     return nothing
 end

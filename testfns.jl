@@ -11,13 +11,13 @@ struct TestFunction{F, G, N}
 end
 
 
-(testfn::TestFunction)(x::AbstractVector{T}) where T <: Real = testfn.f(x)::Float64
+(testfn::TestFunction)(x::AbstractVector{T}) where T = testfn.f(x)::Float64
 gradient(testfn::TestFunction) = testfn.∇f
 
 # Apply the function or its gradient to each column of the matrix
-function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T <: Real
+function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T
     N = size(X, 2)
-    y = zeros(N)
+    y = zeros(T, N)
 
     @views begin
         for i in 1:N
@@ -30,9 +30,9 @@ end
 
 
 function get_collapsed_bounds(t1::TestFunction, t2::TestFunction)
-    closest_to_origin(x::Vector{T}) where T <: Real = x[findmin(abs, x)[2]]
+    closest_to_origin(x::Vector{T}) where T = x[findmin(abs, x)[2]]
 
-    bounds = zeros(t1.dim, 2)
+    bounds = zeros(T, t1.dim, 2)
     union_lowerbounds = [t1.bounds[:, 1] t2.bounds[:, 1]]
     union_upperbounds = [t1.bounds[:, 2] t2.bounds[:, 2]]
 

@@ -1,33 +1,33 @@
-function base_solve(
+function base_solve_nlopt2(
+    dr::AbstractDecisionRule,
     surrogate::AbstractSurrogate,
-    decision_rule::AbstractDecisionRule,
-    spatial_lbs::AbstractVector{T},
-    spatial_ubs::AbstractVector{T},
-    xstart::AbstractVector{T},
-    cache::SurrogateEvaluationCache) where T <: Real
-    fun(x) = -eval(surrogate, decision_rule, x, cache)
-    fun_grad!(g, x) = begin
-        g[:] = -eval_gradient(surrogate, decision_rule, x, cache) 
-    end
-    fun_hess!(h, x) = begin
-        h[:, :] = -eval_hessian(surrogate, decision_rule, x, cache)
-    end
+    lowerbounds::AbstractVector{T},
+    upperbounds::AbstractVector{T},
+    restarts::Int) where T <: Real
+    dim = length(lowerbounds)
+    opt = NLopt.Opt(:LD_LBFGS, dim)
+    lower_bounds!(opt, lowerbounds)
+    upper_bounds!(opt, upperbounds)
 
-    df = TwiceDifferentiable(fun, fun_grad!, fun_hess!, xstart)
-    dfc = TwiceDifferentiableConstraints(spatial_lbs, spatial_ubs)
-    res = optimize(
-        df, dfc, xstart, IPNewton(),
-        Optim.Options(
-            x_tol=1e-4,
-            f_tol=1e-4,
-            time_limit=NEWTON_SOLVE_TIME_LIMIT,
-            outer_iterations=100,
-            # iterations=20,
-        )
-    )
-    
-    return Optim.minimizer(res), res
+    setparams!(dr, surrogate)
+    f = gradient_wrapper(to_function(dr, surrogate))
+    NLopt.max_objective!(opt, f)
+    minf = Inf
+    minx = lowerbounds
+    seq = ScaledLHSIterator(lowerbounds, upperbounds, restarts)
+
+    for x0 in seq
+        f, x, ret = NLopt.optimize(opt, x0)
+        ret == NLopt.FORCED_STOP &&
+            @warn("NLopt returned FORCED_STOP while optimizing the acquisition function.")
+        if f > minf
+            minf = f
+            minx = x
+        end
+    end
+    return minf, minx
 end
+
 
 function base_solve_nlopt(
     surrogate::AbstractSurrogate,
@@ -79,31 +79,31 @@ function multistart_base_solve!(
     xfinal::AbstractVector{T},
     spatial_lbs::AbstractVector{T},
     spatial_ubs::AbstractVector{T},
-    guesses::Matrix{T},
     cache::SurrogateEvaluationCache,
-    minimizers_container::Vector{Vector{T}},
-    minimums_container::AbstractVector{T}) where T <: Real
-    # if get_name(get_decision_rule(surrogate)) == "Random"
-    #     xfinal[:] = spatial_lbs .+ (spatial_ubs .- spatial_lbs) .* rand(length(spatial_lbs))
-    #     return nothing
-    # end
+    restarts::Int = 256) where T <: Real
+    if get_name(decision_rule) == RANDOM_SAMPLER_NAME
+        xfinal[:] .= randsample(1, length(xfinal), spatial_lbs, spatial_ubs)
+        return nothing
+    end
 
-    M = size(guesses, 2)    
-    for i in 1:size(guesses, 2)
-        @timeit to "Base Solve NLopt" minimizer, f_min = base_solve_nlopt(
+    maxf = -Inf
+    maxx = spatial_lbs
+    seq = ScaledLHSIterator(lbs, ubs, restarts)
+    for xstart in seq
+        @timeit to "Base Solve NLopt" maximizer, f_max = base_solve_nlopt(
             surrogate,
             decision_rule,
             spatial_lbs,
             spatial_ubs,
-            guesses[:, i],
+            convert(Vector, xstart),
             cache
         )
-        minimizers_container[i] = minimizer
-        minimums_container[i] = -f_min
+        invalidate!(cache)
+        if f_max > maxf
+            maxf = f_max
+            maxx = maximizer
+        end
     end
-    
-    idx = argmin(minimums_container)
-    xfinal[:] = minimizers_container[idx]
-
+    xfinal[:] .= maxx
     return nothing
 end

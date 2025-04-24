@@ -7,26 +7,26 @@ struct PolynomialTrend
     containers::PreallocatedContainers
 end
 
-function PolynomialTrend(ϕ::PolynomialBasisFunction, coefficients::Vector{T}, dim::Int64) where T <: Real
+function PolynomialTrend(ϕ::PolynomialBasisFunction, coefficients::Vector{T}, dim::Int64) where T
     NOT_IMPORTANT = 1
     return PolynomialTrend(
         ϕ,
         coefficients,
-        PreallocatedContainers(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT)
+        PreallocatedContainers{Float64}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT)
     )
 end
 
 
 # Want to evaluate the polynomial at some arbitrary location and use this mechanism
 # to adds arbitrary trends to a TestFunction
-function (pt::PolynomialTrend)(x::AbstractVector{T}) where T <: Real
+function (pt::PolynomialTrend)(x::AbstractVector{T}) where T
     # eval_basis!(pt.ϕ, x, (@view pt.containers.px[1, :]))
     eval_basis!(pt.ϕ, x, (@view pt.containers.px[1:1, :]))
     return dot(pt.containers.px, pt.coefficients)
 end
 
 
-function gradient(pt::PolynomialTrend, x::AbstractVector{T}) where T <: Real
+function gradient(pt::PolynomialTrend, x::AbstractVector{T}) where T
     eval_∇basis!(
         pt.ϕ,
         x,
@@ -80,10 +80,8 @@ end
 # This serves as a replacement for operator+.
 function plus(
     tf::TestFunction,
-    pt::PolynomialTrend,
-    initial_xs::Matrix{Float64},
-    minimizers::Vector{Vector{Float64}},
-    f_minimums::Vector{Float64}
+    pt::PolynomialTrend;
+    M::Int = 256
     )
     cf = CompositeFunction(tf, pt)
     barrier = TestFunctionBarrier(cf, composite_f, composite_∇f!)
@@ -92,31 +90,31 @@ function plus(
     # The global minimizer is subject to shifting, so we find the global minimizer
     # algorithmically.
     lbs, ubs = get_bounds(tf)
-    M = length(minimizers)
+    minf = tf(tf.xopt[1])
+    minx = tf.xopt[1]
+    seq = ScaledLHSIterator(lbs, ubs, M)
 
-    for i in 1:M-1
+    for xstart in seq
         # print("$i-")
         results = Optim.optimize(
             barrier,
             ∇barrier!,
             lbs,
             ubs,
-            initial_xs[:, i],
+            convert(Vector, xstart),
             Fminbox(LBFGS()),
             Optim.Options(x_tol=1e-3, f_tol=1e-3, time_limit=.1)
         )
-        minimizers[i] = Optim.minimizer(results)
-        f_minimums[i] = Optim.minimum(results)
+        if Optim.minimum(results) < minf
+            minf = Optim.minimum(results)
+            minx = Optim.minimizer(results)
+        end
     end
-    minimizers[M] = tf.xopt[1]
-    f_minimums[M] = tf(tf.xopt[1])
-    idx = argmin(f_minimums)
-    minimizer = minimizers[idx]
 
     return TestFunction(
         tf.dim,
         tf.bounds,
-        Tuple([minimizer]),
+        Tuple([minx]),
         barrier,
         ∇barrier!
     )

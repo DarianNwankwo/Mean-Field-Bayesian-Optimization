@@ -136,24 +136,20 @@ function get_trends(bias, dim)
     surrogate_trends = [
         PolynomialBasisFunction(
             Tuple([ϕ_zero]),
-            Tuple([∇ϕ_zero!]),
-            Tuple([Hϕ_zero!])
+            Tuple([∇ϕ_zero!])
         ),
         PolynomialBasisFunction(
             Tuple([ϕ_constant]),
-            Tuple([∇ϕ_constant!]),
-            Tuple([Hϕ_constant!])
+            Tuple([∇ϕ_constant!])
         )
         ,
         PolynomialBasisFunction(
             get_linear_phi_functions(dim),
-            get_∇linear_phi_functions(dim),
-            get_Hlinear_phi_functions(dim)
+            get_∇linear_phi_functions(dim)
         ),
         PolynomialBasisFunction(
             Tuple([ϕ_constant, ϕ_quadratic]),
-            Tuple([∇ϕ_constant!, ∇ϕ_quadratic!]),
-            Tuple([Hϕ_constant!, Hϕ_quadratic!])
+            Tuple([∇ϕ_constant!, ∇ϕ_quadratic!])
         )
     ]
 
