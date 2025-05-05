@@ -103,7 +103,7 @@ function plus(
             ubs,
             convert(Vector, xstart),
             Fminbox(LBFGS()),
-            Optim.Options(x_tol=1e-3, f_tol=1e-3, time_limit=.1)
+            Optim.Options(x_reltol=1e-3, f_reltol=1e-3, time_limit=NEWTON_SOLVE_TIME_LIMIT)
         )
         if Optim.minimum(results) < minf
             minf = Optim.minimum(results)

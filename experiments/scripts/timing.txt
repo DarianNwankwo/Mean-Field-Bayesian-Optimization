@@ -1,0 +1,15 @@
+ackley2d: 38.900984000 seconds
+ackley8d: 50.143031000 seconds
+braninhoo: 34.486009000 seconds
+goldsteinprice: 327.015532000 seconds
+gramacylee: 36.757513000 seconds
+griewank3d: 47.639481000 seconds
+hartmann6d: 40.616134000 seconds
+mccormick: 35.486980000 seconds
+rastrigin4d: 35.196358000 seconds
+rosenbrock: 42.798477000 seconds
+schwefel4d: 37.694163000 seconds
+shekel4d: 34.646809000 seconds
+sixhump: 35.024879000 seconds
+styblinskitang10d: 36.285405000 seconds
+trid4d: 37.363416000 seconds

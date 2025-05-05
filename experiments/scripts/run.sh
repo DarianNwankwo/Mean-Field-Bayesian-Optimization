@@ -9,15 +9,16 @@ SHOULD_OPTIMIZE=1
 
 # Array of test function names
 function_names=(
-  # "rastrigin4d"
-  # "ackley2d"
-  # "ackley8d"
-  # "rosenbrock"
-  # "sixhump"
-  # "braninhoo"
-  # "goldsteinprice"
-  # "styblinskitang10d"
-  # "schwefel4d"
+  "gramacylee"
+  "rastrigin4d"
+  "ackley2d"
+  "ackley8d"
+  "rosenbrock"
+  "sixhump"
+  "braninhoo"
+  "goldsteinprice"
+  "styblinskitang10d"
+  "schwefel4d"
   "trid4d"
   "mccormick"
   "hartmann6d"
@@ -33,7 +34,7 @@ for fn in "${function_names[@]}"; do
     echo "Running $fn..."
     start=$(date +%s.%N)
     if [ $SHOULD_OPTIMIZE -eq 1 ]; then
-      julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
+      julia --check-bounds=yes ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
         --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET --optimize
     else
       julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \

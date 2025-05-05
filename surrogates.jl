@@ -74,9 +74,9 @@ function schur_reduced_system_solve(
     end
 
     # term7: return concatenated solution
-    w = get_w(schur)
-    w[1:length(w1)] .= w1
-    w[length(w1)+1:length(w1) + schur.active_index] .= w0
+    @timeit to "get_w" w = get_w(schur)
+    @timeit to "assign w1" w[1:length(w1)] .= w1
+    @timeit to "assign w2" w[length(w1)+1:length(w1) + schur.active_index] .= w0
     @timeit to "schur solve term7" return w
 end
 
@@ -178,50 +178,50 @@ In this equation:
 #     return d, λ
 # end
 
+# function coefficient_solve(
+#     L::AbstractMatrix{<:Real},
+#     PX::AbstractMatrix{<:Real},
+#     fx::AbstractVector{<:Real},
+#     schur::SchurBuffer)
+#     @timeit to "get buffers" begin
+#     d = get_d(schur)
+#     λ = get_λ(schur)
+#     Y = get_Y(schur)
+#     S = get_S(schur)
+#     r = get_r(schur)
+#     tmp = get_tmp(schur)
+#     end
+
+
+#     @timeit to "copyto" copyto!(Y, PX)
+#     # Y = L \ PX
+#     # TODO Can insert ElasticPDMat here
+#     @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
+#     # S = Y' * Y
+#     @timeit to "S" mul!(S, transpose(Y), Y)
+
+#     # r = PX' * (L' \ (L \ fx)), all in-place
+#     @timeit to "fx copy" copyto!(tmp, fx)
+#     @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
+#     @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
+
+#     # Solve S * λ = r in-place
+#     @timeit to "mul S" mul!(r, transpose(PX), tmp)
+#     @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
+#     @timeit to "copy r" copyto!(λ, r)
+#     @timeit to "ldiv lambda" ldiv!(fS, λ)
+
+#     # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
+#     @timeit to "fx copy" copyto!(tmp, fx)
+#     @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
+#     @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
+#     @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
+#     @timeit to "copy last" copyto!(d, tmp)
+
+#     @timeit to "return" return d, λ
+# end
+
 function coefficient_solve(
-    L::AbstractMatrix{<:Real},
-    PX::AbstractMatrix{<:Real},
-    fx::AbstractVector{<:Real},
-    schur::SchurBuffer)
-    @timeit to "get buffers" begin
-    d = get_d(schur)
-    λ = get_λ(schur)
-    Y = get_Y(schur)
-    S = get_S(schur)
-    r = get_r(schur)
-    tmp = get_tmp(schur)
-    end
-
-
-    @timeit to "copyto" copyto!(Y, PX)
-    # Y = L \ PX
-    # TODO Can insert ElasticPDMat here
-    @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
-    # S = Y' * Y
-    @timeit to "S" mul!(S, transpose(Y), Y)
-
-    # r = PX' * (L' \ (L \ fx)), all in-place
-    @timeit to "fx copy" copyto!(tmp, fx)
-    @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
-    @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
-
-    # Solve S * λ = r in-place
-    @timeit to "mul S" mul!(r, transpose(PX), tmp)
-    @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
-    @timeit to "copy r" copyto!(λ, r)
-    @timeit to "ldiv lambda" ldiv!(fS, λ)
-
-    # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
-    @timeit to "fx copy" copyto!(tmp, fx)
-    @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
-    @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
-    @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
-    @timeit to "copy last" copyto!(d, tmp)
-
-    @timeit to "return" return d, λ
-end
-
-function coefficient_solve2(
     L::ElasticPDMat,
     PX::AbstractMatrix{<:Real},
     fx::AbstractVector{<:Real},
@@ -236,17 +236,16 @@ function coefficient_solve2(
     end
 
 
+    chol_view = view(L.chol)    
     @timeit to "copyto" copyto!(Y, PX)
-    # Y = L \ PX
-    # TODO Can insert ElasticPDMat here
-    @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
+    @timeit to "ldvi LY" ldiv!(chol_view.L, Y)
     # S = Y' * Y
     @timeit to "S" mul!(S, transpose(Y), Y)
 
     # r = PX' * (L' \ (L \ fx)), all in-place
     @timeit to "fx copy" copyto!(tmp, fx)
-    @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
-    @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
+    @timeit to "ldiv tmp1" ldiv!(chol_view.L, tmp)
+    @timeit to "ldiv tmp2" ldiv!(chol_view.U, tmp)
 
     # Solve S * λ = r in-place
     @timeit to "mul S" mul!(r, transpose(PX), tmp)
@@ -257,8 +256,8 @@ function coefficient_solve2(
     # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
     @timeit to "fx copy" copyto!(tmp, fx)
     @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
-    @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
-    @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
+    @timeit to "ldiv tmp3" ldiv!(chol_view.L, tmp)
+    @timeit to "ldiv tmp4" ldiv!(chol_view.U, tmp)
     @timeit to "copy last" copyto!(d, tmp)
 
     @timeit to "return" return d, λ
@@ -322,7 +321,7 @@ function HybridSurrogate(
     component. 
     """
     d, λ = coefficient_solve(
-        view(preallocated_L.chol).L,
+        preallocated_L,
         PX,
         y,
         containers.schur
@@ -374,7 +373,9 @@ function HybridSurrogate(
     λ_polynomial = zeros(T, length(ϕ))
     preallocated_y = zeros(T, capacity)
     observed = 0
-    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ), 0)
+    containers = PreallocatedContainers{T}(
+        length(ϕ), dim, capacity, length(ψ), observed
+    )
 
     return HybridSurrogate(
         ψ,
@@ -576,7 +577,7 @@ function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
         #     ).L
         # )
         @timeit to "Hybrid Coefficient Solve" d, λ = coefficient_solve(
-            view(s.L.chol).L,
+            s.L,
             get_active_parametric_basis_matrix(s),
             get_active_observations(s),
             get_schur_buffer(s)
@@ -621,7 +622,7 @@ function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
             capacity=s.capacity
         )
         yc = copy(y)
-        ldiv!(s.L, yc)
+        ldiv!(s.L.chol, yc)
         s.d[1:N] = yc
         s.y[1:N] = y
     end
@@ -657,7 +658,7 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         # )
         s.L = ElasticPDMat(
             convert(Matrix, s.Kscratch[1:N, 1:N]),
-            capacity=capacity
+            capacity=s.capacity
         )
         eval_basis!(
             get_parametric_basis_function(s),
@@ -668,7 +669,8 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         # PX = s.P[1:N, 1:length(ϕ)]
         # s.P[1:N, 1:length(ϕ)] = PX
         d, λ = coefficient_solve(
-            view(s.L.chol).L,
+            # view(s.L.chol).L,
+            s.L,
             get_active_parametric_basis_matrix(s),
             y,
             get_schur_buffer(s)
@@ -732,7 +734,7 @@ function update_covariance!(s::HybridSurrogate, x::Vector{T}) where {T<:Real}
             x,
             active_X,
             s.K[update_index, 1:update_index-1],
-            s.containers.KxX
+            get_diff_x(s)
         )
         s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
     end
@@ -754,7 +756,7 @@ function update_covariance!(s::Surrogate, x::Vector{T}) where {T<:Real}
             x,
             active_X,
             s.K[update_index, 1:update_index-1],
-            s.containers.KxX
+            get_diff_x(s)
         )
         s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
     end
@@ -787,7 +789,7 @@ function update_coefficients!(s::HybridSurrogate)
     PX = get_active_parametric_basis_matrix(s)
     y = get_active_observations(s)
     d, λ = coefficient_solve(
-        view(s.L.chol).L,
+        s.L,
         PX,
         y,
         get_schur_buffer(s)

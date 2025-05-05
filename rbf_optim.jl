@@ -57,7 +57,7 @@ function multistart_base_solve!(
 
     maxf = -Inf
     maxx = spatial_lbs
-    seq = ScaledLHSIterator(lbs, ubs, restarts)
+    seq = ScaledLHSIterator(spatial_lbs, spatial_ubs, restarts)
     for xstart in seq
         @timeit to "Base Solve NLopt" maximizer, f_max = base_solve_nlopt(
             surrogate,

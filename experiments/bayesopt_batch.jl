@@ -1,5 +1,4 @@
 using ArgParse
-import ProgressMeter
 
 CONSTANT_TREND = 1.
 
@@ -159,7 +158,6 @@ function main()
     gaps = zeros(cli_args["budget"] + 1)
     simple_regrets = zeros(cli_args["budget"])
     minimum_observations = zeros(cli_args["budget"])
-    M = cli_args["starts"] # starts for optimization composed testfn + trend
 
     println("Beginning Dense Experiments...")
     for testfn_name in testfn_names
@@ -168,15 +166,7 @@ function main()
         payload = testfn_payloads[testfn_name]
         testfn = payload.fn(payload.args...)
         spatial_lbs, spatial_ubs = get_bounds(testfn)
-        initial_xs = randsample(M, testfn.dim, spatial_lbs, spatial_ubs)
-        minimizers = Vector{Vector{Float64}}(undef, M)
-        f_minimums = Vector{Float64}(undef, M)
-        hyper_minimizers = [Vector{Float64}(undef, hyper_dim) for _ in 1:S]
-        hyper_minimums = Vector{Float64}(undef, S)
         xnext = zeros(testfn.dim)
-
-        # Generate the initial starts for the inner optimizer
-        inner_optimizer_starts = generate_initial_guesses(M - 2, spatial_lbs, spatial_ubs)
         
         # Generate surrogate and function trends to offset the test function with
         surrogate_trends, function_trends, initial_observation_sizes = get_trends(CONSTANT_TREND, testfn.dim)
@@ -198,80 +188,76 @@ function main()
             )
         ]
 
-        for (i, trend) in enumerate(function_trends)
-            # Augment the testfn with a trend
-            tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
-            tft_name = function_trend_names[i]
+        for strategy in strategies
+            for (i, trend) in enumerate(function_trends)
+                # Augment the testfn with a trend
+                tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
+                tft_name = function_trend_names[i]
 
-            minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
-            write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
+                minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
+                write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
 
-            for (j, surrogate) in enumerate(surrogates)
-                st_name = surrogate_trend_names[j]
+                for (j, surrogate) in enumerate(surrogates)
+                    st_name = surrogate_trend_names[j]
 
-                # Extract minimizer from testfunction
-                actual_minimum = tfn(tfn.xopt[1])
-                num_initial_observations = ios[j]
+                    # Extract minimizer from testfunction
+                    actual_minimum = tfn(tfn.xopt[1])
+                    num_initial_observations = ios[j]
 
-                # Construct path to directory maintaining current experiments data
-                path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/EI/"
-                
-                println("Beginning Randomized Trials: ")
-                try
+                    # Construct path to directory maintaining current experiments data
+                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$(get_name(strategy))/"
+                    
+                    println("Beginning Randomized Trials: ")
                     for trial in 1:cli_args["trials"]
-                        print("$trial.) ")
-                        # Gather initial design for our statistical model
-                        Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
-                        yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
-                        new_ei = ExpectedImprovement(
-                            minimum(yinit),
-                            0.
-                        )
-                        
-                        # Set the correct entries in the preallocated surrogate
-                        set!(surrogate, Xinit, yinit)
+                        try
+                            print("$trial.) $(st_name)\n")
+                            # Gather initial design for our statistical model
+                            Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
+                            yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
+                            
+                            # Set the correct entries in the preallocated surrogate
+                            set!(surrogate, Xinit, yinit)
 
-                        # Perform Bayesian optimization loop
-                        surrogate = bayesian_optimize!(
-                            surrogate,
-                            new_ei,
-                            tfn,
-                            spatial_lbs,
-                            spatial_ubs,
-                            kernel_lbs,
-                            kernel_ubs,
-                            cli_args["budget"],
-                            xnext,
-                            cli_args["starts"],
-                            cli_args["kernel-starts"]
-                        )
+                            # Perform Bayesian optimization loop
+                            surrogate = bayesian_optimize!(
+                                surrogate,
+                                strategy,
+                                tfn,
+                                spatial_lbs,
+                                spatial_ubs,
+                                kernel_lbs,
+                                kernel_ubs,
+                                cli_args["budget"],
+                                xnext,
+                                cli_args["starts"],
+                                cli_args["kernel-starts"]
+                            )
 
-                        # Extract performance metrics
-                        observations = get_active_observations(surrogate)
-                        get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
-                        update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
-                        update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
+                            # Extract performance metrics
+                            observations = get_active_observations(surrogate)
+                            get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
+                            update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
+                            update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
 
-                        # Write performance metrics to disk.
-                        write_gaps_to_disk(path_prefix, gaps, trial)
-                        write_observations_to_disk(path_prefix, observations, trial)
-                        write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
-                        write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
+                            # Write performance metrics to disk.
+                            write_gaps_to_disk(path_prefix, gaps, trial)
+                            write_observations_to_disk(path_prefix, observations, trial)
+                            write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
+                            write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
 
-                        # ProgressMeter.next!(progress)
+                        catch e
+                            err_dir = "$current_directory/data/$testfn_name"
+                            mkpath(err_dir)
+                            open("$err_dir/error_trial_$(trial).txt", "w+") do io
+                                println(io, "Trial #$(trial) Error: ", sprint(showerror, e, catch_backtrace()))
+                            end
+                        end
                     end
                     println()
                     flush(stdout)
-                catch e
-                    err_dir = "$current_directory/data/$testfn_name"
-                    mkpath(err_dir)
-                    open("$err_dir/error.txt", "w+") do io
-                        println(io, "Trial #$(trial) Error: ", sprint(showerror, e, catch_backtrace()))
-                    end
                 end
             end
         end
-    
     end
 end
 

@@ -12,13 +12,13 @@ using IterTools
 using Tables
 using CSV
 using DataFrames
-using Base.Threads
 using StaticArrays
 using SpecialFunctions
 using NLopt
 using TimerOutputs
 using ElasticPDMats
 using DiffResults
+using BayesianOptimization
 
 const to = TimerOutput()
 
@@ -67,9 +67,9 @@ function bayesian_optimize!(
         )
         invalidate!(cache)
         ynext = testfn(xnext) + get_observation_noise(surrogate)
-        @timeit to "Model Update" surrogate = condition!(surrogate, xnext, ynext)
-        # print("-")
-        @timeit to "Hyperparameter Optimization" optimize!(
+        surrogate = condition!(surrogate, xnext, ynext)
+        print("-")
+        optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
             upperbounds=kernel_ubs,
