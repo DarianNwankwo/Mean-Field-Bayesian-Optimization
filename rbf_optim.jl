@@ -1,34 +1,3 @@
-function base_solve_nlopt2(
-    dr::AbstractDecisionRule,
-    surrogate::AbstractSurrogate,
-    lowerbounds::AbstractVector{T},
-    upperbounds::AbstractVector{T},
-    restarts::Int) where T <: Real
-    dim = length(lowerbounds)
-    opt = NLopt.Opt(:LD_LBFGS, dim)
-    lower_bounds!(opt, lowerbounds)
-    upper_bounds!(opt, upperbounds)
-
-    setparams!(dr, surrogate)
-    f = gradient_wrapper(to_function(dr, surrogate))
-    NLopt.max_objective!(opt, f)
-    minf = Inf
-    minx = lowerbounds
-    seq = ScaledLHSIterator(lowerbounds, upperbounds, restarts)
-
-    for x0 in seq
-        f, x, ret = NLopt.optimize(opt, x0)
-        ret == NLopt.FORCED_STOP &&
-            @warn("NLopt returned FORCED_STOP while optimizing the acquisition function.")
-        if f > minf
-            minf = f
-            minx = x
-        end
-    end
-    return minf, minx
-end
-
-
 function base_solve_nlopt(
     surrogate::AbstractSurrogate,
     decision_rule::AbstractDecisionRule,

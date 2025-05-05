@@ -1,10 +1,11 @@
-mutable struct SurrogateEvaluationCache
+mutable struct SurrogateEvaluationCache # <: AbstractEvaluationCache
     x::Vector{Float64}          # Last input used for evaluation
     μ::Float64                  # Cached mean
     σ::Float64                  # Cached standard deviation
     ∇μ::Vector{Float64}         # Cached gradient of the mean
     ∇σ::Vector{Float64}         # Cached gradient of the standard deviation
     valid::Bool                 # Flag indicating if the cache is valid
+    updates::Int64
 end
 
 # Constructor for the cache, assuming dimension `d` for the input x.
@@ -15,7 +16,8 @@ function SurrogateEvaluationCache(d::Int)
         0.0,
         zeros(d),
         zeros(d),
-        false
+        false,
+        0
     )
 end
 invalidate!(cache::SurrogateEvaluationCache) = cache.valid = false
@@ -24,13 +26,17 @@ function evaluate_moments_and_derivatives!(
     s::AbstractSurrogate,
     x::Vector{T},
     cache::SurrogateEvaluationCache;
-    atol=1e-10
+    atol=1e-6
 ) where T
     if cache.valid && all(abs.(x .- cache.x) .< atol)
         return (; μ=cache.μ, σ=cache.σ, ∇μ=cache.∇μ, ∇σ=cache.∇σ)
     end
-
+    # μ = predictive_mean(s, x, cache)
+    # σ = predictive_std(s, x, cache)
+    # ∇μ = predictive_mean_gradient(s, x, cache)
+    # ∇σ = predictive_std_gradient(s, x, cache)
     # If not, compute and update the cache.
+    cache.updates += 1
     μ, σ = compute_moments(s, x)
     ∇μ, ∇σ = compute_moments_gradient(s, x)
 
@@ -178,7 +184,7 @@ get_name(::UpperConfidenceBound) = UPPER_CONFIDENCE_BOUND_NAME
     cache::SurrogateEvaluationCache
     ) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
-    return m.μ + ucb.beta * m.σ
+    return -(m.μ + ucb.beta * m.σ)
 end
 
 @inline function eval_gradient(
@@ -188,5 +194,5 @@ end
     cache::SurrogateEvaluationCache
     ) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
-    return m.∇μ + ucb.beta * m.∇σ
+    return -(m.∇μ + ucb.beta * m.∇σ)
 end

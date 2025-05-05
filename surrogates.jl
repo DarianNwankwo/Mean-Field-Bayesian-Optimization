@@ -18,7 +18,67 @@ get_active_observations(s::AbstractSurrogate) = @view get_observations(s)[1:get_
 get_active_coefficients(s::AbstractSurrogate) = @view get_coefficients(s)[1:get_observed(s)]
 get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 get_dim(s::AbstractSurrogate) = size(s.X, 1)
+get_schur_buffer(s::AbstractSurrogate) = s.containers.schur
 
+
+function schur_reduced_system_solve(
+    L::AbstractMatrix{<:Real},
+    PX::AbstractMatrix{<:Real},
+    Px::AbstractMatrix{<:Real},
+    KxX::AbstractVector{<:Real},
+    schur::SchurBuffer)
+    # Preallocate scratch buffers
+    n, m = size(PX)
+    Y = get_Y(schur)
+    S = get_S(schur)
+    tmp = get_tmp(schur)
+    r = get_r(schur)
+
+    # term1: Y = L \ PX
+    @timeit to "schur solve term0" begin
+        copyto!(Y, PX)
+    end
+    
+    @timeit to "schur solve term1" begin
+        ldiv!(LowerTriangular(L), Y)
+    end
+
+    # term2: S = Y' * Y
+    @timeit to "schur solve term2" mul!(S, transpose(Y), Y)
+
+    # term3: r = Y'*(L \ KxX) - Px
+    @timeit to "schur solve term3" begin
+        copyto!(tmp, KxX)
+        ldiv!(LowerTriangular(L), tmp)
+        mul!(r, transpose(Y), tmp)
+        r .-= Px
+    end
+
+    # term4: Cholesky factor of S
+    @timeit to "schur solve term4" fS = cholesky!(Hermitian(S))
+
+    # term5: w1 = fS \ r  (in-place solve)
+    w1 = get_w1(schur)
+    @timeit to "schur solve term5" begin
+        copyto!(w1, r)
+        ldiv!(fS, w1)
+    end
+
+    # term6: w0 = L'\(L\(KxX - PX*w1))
+    w0 = get_w0(schur)
+    @timeit to "schur solve term6" begin
+        copyto!(w0, KxX)
+        mul!(w0, PX, w1, -1.0, 1.0)     # w0 = KxX - PX*w1
+        ldiv!(LowerTriangular(L), w0)
+        ldiv!(UpperTriangular(L'), w0)
+    end
+
+    # term7: return concatenated solution
+    w = get_w(schur)
+    w[1:length(w1)] .= w1
+    w[length(w1)+1:length(w1) + schur.active_index] .= w0
+    @timeit to "schur solve term7" return w
+end
 
 """
 The model we consider consists of some parametric and nonparametric component, i.e.
@@ -33,14 +93,17 @@ We also maintain how many the number of observations and our model's capacity, f
 considerations. We preallocate, for memory purposes, ahead of time. In the event we reach capacity,
 we double our model's capacity.
 """
-mutable struct HybridSurrogate{RBF<:StationaryKernel,PBF<:ParametricRepresentation} <: AbstractSurrogate
+mutable struct HybridSurrogate{
+    RBF <: StationaryKernel,
+    PBF <: ParametricRepresentation,
+    PM <: ElasticPDMat} <: AbstractSurrogate
     ψ::RBF
     ϕ::PBF
     X::Matrix{Float64} # Covariates
     P::Matrix{Float64} # Parametric term design matrix
     K::Matrix{Float64} # Covariance matrix for Gaussian process
     Kscratch::Matrix{Float64}
-    L::LowerTriangular{Float64,Matrix{Float64}} # Cholesky factorization of covariance matrix
+    L::PM # Cholesky factorization of covariance matrix
     y::Vector{Float64}
     d::Vector{Float64} # Coefficients for Gaussian process
     λ::Vector{Float64} # Coefficients for parametric/trend term
@@ -101,18 +164,104 @@ In this equation:
 - `λ`: A vector of length p_dim, representing the solution coefficients for the
     bottom block of the system.
 """
+# function coefficient_solve(
+#     KXX::AbstractMatrix{T1},
+#     PX::AbstractMatrix{T2},
+#     y::AbstractVector{T3}) where {T1<:Real,T2<:Real,T3<:Real}
+#     p_dim, k_dim = size(PX, 2), size(KXX, 2)
+#     A = [KXX PX;
+#         PX' zeros(p_dim, p_dim)]
+#     F = lu(A)
+#     b = [y; zeros(p_dim)]
+#     w = F \ b
+#     d, λ = w[1:k_dim], w[k_dim+1:end]
+#     return d, λ
+# end
+
 function coefficient_solve(
-    KXX::AbstractMatrix{T1},
-    PX::AbstractMatrix{T2},
-    y::AbstractVector{T3}) where {T1<:Real,T2<:Real,T3<:Real}
-    p_dim, k_dim = size(PX, 2), size(KXX, 2)
-    A = [KXX PX;
-        PX' zeros(p_dim, p_dim)]
-    F = lu(A)
-    b = [y; zeros(p_dim)]
-    w = F \ b
-    d, λ = w[1:k_dim], w[k_dim+1:end]
-    return d, λ
+    L::AbstractMatrix{<:Real},
+    PX::AbstractMatrix{<:Real},
+    fx::AbstractVector{<:Real},
+    schur::SchurBuffer)
+    @timeit to "get buffers" begin
+    d = get_d(schur)
+    λ = get_λ(schur)
+    Y = get_Y(schur)
+    S = get_S(schur)
+    r = get_r(schur)
+    tmp = get_tmp(schur)
+    end
+
+
+    @timeit to "copyto" copyto!(Y, PX)
+    # Y = L \ PX
+    # TODO Can insert ElasticPDMat here
+    @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
+    # S = Y' * Y
+    @timeit to "S" mul!(S, transpose(Y), Y)
+
+    # r = PX' * (L' \ (L \ fx)), all in-place
+    @timeit to "fx copy" copyto!(tmp, fx)
+    @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
+    @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
+
+    # Solve S * λ = r in-place
+    @timeit to "mul S" mul!(r, transpose(PX), tmp)
+    @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
+    @timeit to "copy r" copyto!(λ, r)
+    @timeit to "ldiv lambda" ldiv!(fS, λ)
+
+    # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
+    @timeit to "fx copy" copyto!(tmp, fx)
+    @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
+    @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
+    @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
+    @timeit to "copy last" copyto!(d, tmp)
+
+    @timeit to "return" return d, λ
+end
+
+function coefficient_solve2(
+    L::ElasticPDMat,
+    PX::AbstractMatrix{<:Real},
+    fx::AbstractVector{<:Real},
+    schur::SchurBuffer)
+    @timeit to "get buffers" begin
+    d = get_d(schur)
+    λ = get_λ(schur)
+    Y = get_Y(schur)
+    S = get_S(schur)
+    r = get_r(schur)
+    tmp = get_tmp(schur)
+    end
+
+
+    @timeit to "copyto" copyto!(Y, PX)
+    # Y = L \ PX
+    # TODO Can insert ElasticPDMat here
+    @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
+    # S = Y' * Y
+    @timeit to "S" mul!(S, transpose(Y), Y)
+
+    # r = PX' * (L' \ (L \ fx)), all in-place
+    @timeit to "fx copy" copyto!(tmp, fx)
+    @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
+    @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
+
+    # Solve S * λ = r in-place
+    @timeit to "mul S" mul!(r, transpose(PX), tmp)
+    @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
+    @timeit to "copy r" copyto!(λ, r)
+    @timeit to "ldiv lambda" ldiv!(fS, λ)
+
+    # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
+    @timeit to "fx copy" copyto!(tmp, fx)
+    @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
+    @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
+    @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
+    @timeit to "copy last" copyto!(d, tmp)
+
+    @timeit to "return" return d, λ
 end
 
 """
@@ -128,7 +277,7 @@ function HybridSurrogate(
     observation_noise::T=1e-6) where {T<:Real}
     @assert length(y) <= capacity "Capacity must be >= number of observations."
     dim, N = size(X)
-    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ))
+    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ), N)
 
     """
     Preallocate a matrix for covariates of size d x capacity where capacity is the maximum
@@ -143,7 +292,7 @@ function HybridSurrogate(
     """
     preallocated_P = zeros(T, capacity, length(ϕ))
     eval_basis!(ϕ, X, (@view preallocated_P[1:N, 1:length(ϕ)]))
-    PX = preallocated_P[1:N, 1:length(ϕ)]
+    PX = @view preallocated_P[1:N, 1:length(ϕ)]
 
     """
     Preallocate a covariance matrix of size d x capacity
@@ -160,18 +309,24 @@ function HybridSurrogate(
     """
     Preallocate a matrix for the cholesky factorization of size d x capacity
     """
-    preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
-    preallocated_L[1:N, 1:N] = cholesky(
-        Hermitian(
-            preallocated_K[1:N, 1:N]
-        )
-    ).L
+    # preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
+    # preallocated_L[1:N, 1:N] = cholesky(
+    #     Hermitian(
+    #         preallocated_K[1:N, 1:N]
+    #     )
+    # ).L
+    preallocated_L = ElasticPDMat((@view preallocated_Kscratch[1:N, 1:N]), capacity=capacity)
 
     """
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    d, λ = coefficient_solve((@view preallocated_K[1:N, 1:N]), PX, y)
+    d, λ = coefficient_solve(
+        view(preallocated_L.chol).L,
+        PX,
+        y,
+        containers.schur
+    )
 
     preallocated_d = zeros(T, capacity)
     preallocated_d[1:length(d)] = d
@@ -213,13 +368,13 @@ function HybridSurrogate(
     preallocated_P = zeros(T, capacity, length(ϕ))
     preallocated_K = zeros(T, capacity, capacity)
     preallocated_Kscratch = zeros(T, capacity, capacity)
-    preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
-    # preallocated_L = zeros(capacity, capacity)
+    # preallocated_L = LowerTriangular(zeros(T, capacity, capacity))
+    preallocated_L = ElasticPDMat(capacity=capacity)
     preallocated_d = zeros(T, capacity)
     λ_polynomial = zeros(T, length(ϕ))
     preallocated_y = zeros(T, capacity)
     observed = 0
-    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ))
+    containers = PreallocatedContainers{T}(length(ϕ), dim, capacity, length(ψ), 0)
 
     return HybridSurrogate(
         ψ,
@@ -266,7 +421,8 @@ function Surrogate(
         UNUSED_NUMBER_OF_BASIS_FUNCTIONS,
         d,
         capacity,
-        length(ψ)
+        length(ψ),
+        N
     )
 
     preallocated_X = zeros(T, d, capacity)
@@ -321,7 +477,8 @@ function Surrogate(
         UNUSED_NUMBER_OF_BASIS_FUNCTIONS,
         dim,
         capacity,
-        length(ψ)
+        length(ψ),
+        0
     )
 
     return Surrogate(
@@ -366,12 +523,12 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
             Kbuffer,
             get_diff_x(s)
         )
+        # Ensures PSDness
+        @timeit to "Jitter Diag" for jj in 1:N Kbuffer[jj, jj] += (JITTER + observation_noise) end
         copyto!(
             s.K[1:N, 1:N],
             Kbuffer
         )
-        # Ensures PSDness
-        @timeit to "Jitter Diag" for jj in 1:N Kbuffer[jj, jj] += (JITTER + observation_noise) end
         @timeit to "Scratchpad Assignment" copyto!(
             view(s.L.chol).factors,
             Kbuffer
@@ -387,41 +544,56 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
     # println("Factors After: ", view(s.L.chol).factors)
 end
 
+
 function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
     @views begin
         N = get_observed(s)
         s.ψ = kernel
         observation_noise = get_observation_noise(s)
         # s.K[1:N, 1:N] = eval_KXX(kernel, get_active_covariates(s)) + (JITTER + σn2) * I
+        # Grab the buffer and update inplace
+        Kbuffer = s.L.mat
         eval_KXX!(
             kernel,
             get_active_covariates(s),
-            get_active_covariance(s),
+            Kbuffer,
             get_diff_x(s)
         )
-        for jj in 1:N
-            s.K[jj, jj] += (JITTER + observation_noise)
-        end
-        s.L[1:N, 1:N] = LowerTriangular(
-            cholesky(
-                Hermitian(get_active_covariance(s))
-            ).L
+        # Ensure PSDness
+        for jj in 1:N Kbuffer[jj, jj] += (JITTER + observation_noise) end
+        copyto!(
+            s.K[1:N, 1:N],
+            Kbuffer
         )
+        copyto!(
+            view(s.L.chol).factors,
+            Kbuffer
+        )
+        cholesky!(Symmetric(view(s.L.chol).factors))
+        # s.L[1:N, 1:N] = LowerTriangular(
+        #     cholesky(
+        #         Hermitian(get_active_covariance(s))
+        #     ).L
+        # )
         @timeit to "Hybrid Coefficient Solve" d, λ = coefficient_solve(
-            get_active_covariance(s),
+            view(s.L.chol).L,
             get_active_parametric_basis_matrix(s),
-            get_active_observations(s)
+            get_active_observations(s),
+            get_schur_buffer(s)
         )
         s.d[1:N] = d
         s.λ[:] = λ
     end
 end
 
+
 function set_parametric_component!(s::HybridSurrogate, pbf::PolynomialBasisFunction)
     s.ϕ = pbf
 end
 
+
 set_parametric_component!(s::Surrogate, pbf::PolynomialBasisFunction) = nothing
+
 
 function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
     @views begin
@@ -429,6 +601,7 @@ function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
 
         s.X[:, 1:N] = X
         s.observed = N
+        s.containers.schur.active_index = N
         observation_noise = get_observation_noise(s)
         eval_KXX!(
             get_kernel(s),
@@ -454,26 +627,37 @@ function set!(s::Surrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
     end
 end
 
+
 function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
     @views begin
         dim, N = size(X)
 
         s.X[:, 1:N] = X
         s.observed = N
+        s.containers.schur.active_index = N
         observation_noise = get_observation_noise(s)
         eval_KXX!(
             get_kernel(s),
             get_active_covariates(s),
             get_active_covariance(s),
-            s.containers.diff_x
+            get_diff_x(s)
         )
-        s.K[1:N, 1:N] += (JITTER + observation_noise) * I
-        s.L[1:N, 1:N] = LowerTriangular(
-            cholesky(
-                Hermitian(
-                    get_active_covariance(s)
-                )
-            ).L
+        # Ensures PDSness
+        for jj in 1:N
+            get_active_covariance(s)[jj, jj] += (JITTER + observation_noise)
+        end
+        # s.K[1:N, 1:N] += (JITTER + observation_noise) * I
+        copyto!(s.Kscratch[1:N, 1:N], get_active_covariance(s))
+        # s.L[1:N, 1:N] = LowerTriangular(
+        #     cholesky(
+        #         Hermitian(
+        #             get_active_covariance(s)
+        #         )
+        #     ).L
+        # )
+        s.L = ElasticPDMat(
+            convert(Matrix, s.Kscratch[1:N, 1:N]),
+            capacity=capacity
         )
         eval_basis!(
             get_parametric_basis_function(s),
@@ -484,9 +668,10 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
         # PX = s.P[1:N, 1:length(ϕ)]
         # s.P[1:N, 1:length(ϕ)] = PX
         d, λ = coefficient_solve(
-            get_active_covariance(s),
+            view(s.L.chol).L,
             get_active_parametric_basis_matrix(s),
-            y
+            y,
+            get_schur_buffer(s)
         )
         s.d[1:N] = d
         s.λ[1:length(get_parametric_basis_function(s))] = λ
@@ -506,6 +691,7 @@ function resize(s::HybridSurrogate)
     )
 end
 
+
 function resize(s::Surrogate)
     return Surrogate(
         get_kernel(s),
@@ -517,15 +703,21 @@ function resize(s::Surrogate)
 end
 
 
-
 function insert!(s::AbstractSurrogate, x::Vector{T}, y::T) where {T<:Real}
     insert_index = get_observed(s) + 1
     s.X[:, insert_index] = x
     s.y[insert_index] = y
 end
 
+function insert!(s::HybridSurrogate, x::Vector{T}, y::T) where { T <: Real }
+    insert_index = get_observed(s) + 1
+    s.containers.schur.active_index += 1
+    s.X[:, insert_index] = x
+    s.y[insert_index] = y 
+end
 
-function update_covariance!(s::AbstractSurrogate, x::Vector{T}) where {T<:Real}
+
+function update_covariance!(s::HybridSurrogate, x::Vector{T}) where {T<:Real}
     @views begin
         update_index = get_observed(s)
         active_X = get_covariates(s)[:, 1:update_index-1]
@@ -544,6 +736,7 @@ function update_covariance!(s::AbstractSurrogate, x::Vector{T}) where {T<:Real}
         )
         s.K[1:update_index-1, update_index] = s.K[update_index, 1:update_index-1]
     end
+    append!(s.L, vec(s.K[1:update_index, update_index]))
 end
 
 function update_covariance!(s::Surrogate, x::Vector{T}) where {T<:Real}
@@ -593,7 +786,12 @@ function update_coefficients!(s::HybridSurrogate)
     KXX = get_active_covariance(s)
     PX = get_active_parametric_basis_matrix(s)
     y = get_active_observations(s)
-    d, λ = coefficient_solve(KXX, PX, y)
+    d, λ = coefficient_solve(
+        view(s.L.chol).L,
+        PX,
+        y,
+        get_schur_buffer(s)
+    )
     @views begin
         s.d[1:length(d)] = d
         s.λ[:] = λ
@@ -631,7 +829,7 @@ function condition!(s::HybridSurrogate, xnew::Vector{T}, ynew::T) where {T<:Real
     insert!(s, xnew, ynew) # Updates covariate matrix X and observation vector y
     increment!(s)
     update_covariance!(s, xnew) # Updates covariance matrix K
-    update_cholesky!(s) # Updates cholesky factorization matrix L
+    # update_cholesky!(s) # Updates cholesky factorization matrix L
     update_parametric_design_matrix!(s) # Updates parametric design matrix P
     update_coefficients!(s) # Updates coefficients d, λ
     return s
@@ -686,7 +884,7 @@ function predictive_mean_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
     return ∇kx * d + ∇px * λ
 end
 
-function predictive_std(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Predictive Std" function predictive_std(s::HybridSurrogate, x::AbstractVector{<:Real})
     kx = eval_KxX!(
         get_kernel(s),
         x,
@@ -700,18 +898,20 @@ function predictive_std(s::HybridSurrogate, x::AbstractVector{<:Real})
         get_px(s)
     )
     v = vcat(vec(px), kx)
-    zz = get_zz(s)
-    P = get_active_parametric_basis_matrix(s)
-    K = get_active_covariance(s)
-    # TODO: Maybe don't form this linear system explicitly
-    A = [zz P';
-         P K]
-    w = A \ v
+    P = get_active_parametric_basis_matrix(s)   
+    w = schur_reduced_system_solve(
+        get_active_cholesky(s),
+        P,
+        px,
+        kx,
+        get_schur_buffer(s)
+    )
+     
     k0 = get_kernel(s)(0.)
     return sqrt(k0 - dot(v, w))
 end
 
-function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Predictive Std Gradient" function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
     kx = eval_KxX!(
@@ -726,18 +926,10 @@ function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
         x,
         get_px(s)
     )
-    v = vcat(vec(px), kx)
     ∇px = eval_∇basis!(
         get_parametric_basis_function(s),
         x,
         get_grad_px(s)
-    )
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
     )
     ∇kx = eval_∇KxX!(
         get_kernel(s),
@@ -746,11 +938,14 @@ function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
         get_active_grad_KxX(s),
         get_diff_x(s)
     )
-    zz = get_zz(s)
-    A = [zz P';
-         P K]
+    w = schur_reduced_system_solve(
+        get_active_cholesky(s),
+        P,
+        px,
+        kx,
+        get_schur_buffer(s)
+    )
     ∇v = hcat(∇px, ∇kx)
-    w = A \ v
     σ = predictive_std(s, x)
     return -(∇v * w) / σ
 end
@@ -821,6 +1016,32 @@ compute_moments_gradient(s::AbstractSurrogate, x) = (predictive_mean_gradient(s,
 # ------------------------------------------------------------------
 # Operations for computing optimal hyperparameters.
 # ------------------------------------------------------------------
+function logabsdet_M(s::HybridSurrogate)
+    # Get active pieces
+    L = get_active_cholesky(s)         # LowerTriangular from cholesky(K)
+    K = get_active_covariance(s)       # n × n
+    P = get_active_parametric_basis_matrix(s)  # n × m
+    zz = get_zz(s)                     # m × m
+
+    # Step 1: log|det(K)|
+    diagL = diag(L)
+    logabsdetK = 2 * sum(log, diagL)
+
+    # Step 2: form S = zz - P^T K^{-1} P
+    Y = get_Y(get_schur_buffer(s))
+    copyto!(Y, P)
+    ldiv!(LowerTriangular(L), Y)
+    
+    S = get_S(get_schur_buffer(s))
+    copyto!(S, zz)
+    mul!(S, transpose(Y), Y, -1., 1.)
+
+    # Step 3: log|det(S)|
+    logabsdetS = log(abs(det(S)))
+
+    return logabsdetK + logabsdetS
+end
+
 function log_likelihood(s::HybridSurrogate)
     n = get_observed(s)
     m = length(get_parametric_basis_function(s))
@@ -832,10 +1053,11 @@ function log_likelihood(s::HybridSurrogate)
     K = get_active_covariance(s)
     zz = get_zz(s)
 
-    M = Matrix{Float64}(
-        [zz P';
-        P K])
-    ladM = log(abs(det(M)))
+    ladM = logabsdet_M(s)
+    # M = Matrix{Float64}(
+    #     [zz P';
+    #      P  K])
+    # ladM = log(abs(det(M)))
 
     return -dot(yz, dλ) / 2 - n * log(2π) / 2 - ladM
 end

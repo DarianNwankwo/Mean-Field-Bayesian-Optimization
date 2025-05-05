@@ -210,7 +210,9 @@ function eval_∇KxX!(
             norm_diff = sqrt(dot(diff, diff))
             ρ = norm_diff
             if ρ > 0
-                ∇KxX[:,j] = rbf.Dρ_ψ(ρ, rbf.θ)*diff/ρ
+                diff ./= ρ
+                diff .*= rbf.Dρ_ψ(ρ, rbf.θ)
+                ∇KxX[:,j] .= diff
             end
         end
     end

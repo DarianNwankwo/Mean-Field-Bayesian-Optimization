@@ -1,3 +1,42 @@
+mutable struct SchurBuffer{T}
+    Y::Matrix{T}  # size n by m where n = n_0 + budget: variable
+    S::Matrix{T}  # size m by m: fixed
+    tmp::Vector{T}  # size n: variable
+    r::Vector{T}  # size m: fixed
+    w1::Vector{T}  # size m: fixed
+    w0::Vector{T}  # size n: variable
+    w::Vector{T}  # size n + m: variable
+    d::Vector{T}  # size n: variable
+    λ::Vector{T}  # size m: fixed
+    active_index::Int64
+end
+
+# TODO: Add resizing logic
+function SchurBuffer{T}(max_obs, num_basis_functions, active_index) where T
+    return SchurBuffer{T}(
+        zeros(T, max_obs, num_basis_functions),
+        zeros(T, num_basis_functions, num_basis_functions),
+        zeros(T, max_obs),
+        zeros(T, num_basis_functions),
+        zeros(T, num_basis_functions),
+        zeros(T, max_obs),
+        zeros(T, max_obs + num_basis_functions),
+        zeros(T, max_obs),
+        zeros(T, num_basis_functions),
+        active_index
+    )
+end
+
+get_Y(sb::SchurBuffer) = @view sb.Y[1:sb.active_index, :]
+get_S(sb::SchurBuffer) = @view sb.S[:, :]
+get_tmp(sb::SchurBuffer) = @view sb.tmp[1:sb.active_index]
+get_r(sb::SchurBuffer) = @view sb.r[:]
+get_w1(sb::SchurBuffer) = @view sb.w1[:]
+get_w0(sb::SchurBuffer) = @view sb.w0[1:sb.active_index]
+get_w(sb::SchurBuffer) = @view sb.w[1:sb.active_index + length(sb.w1)]
+get_d(sb::SchurBuffer) = @view sb.d[1:sb.active_index]
+get_λ(sb::SchurBuffer) = @view sb.λ[:]
+
 struct PreallocatedContainers{T <: Real}
     px::Matrix{T} # Fixed size
     grad_px::Matrix{T} # Fixed size
@@ -22,14 +61,17 @@ struct PreallocatedContainers{T <: Real}
     Hz::Matrix{T}
     zz::Matrix{T} # Fixed size
     chol_workspace::Matrix{T}
+    schur::SchurBuffer{T}
 end
 
 function PreallocatedContainers{T}(
     num_of_basis_funcitons::Int,
     dim::Int,
     max_obs::Int,
-    hypers_length::Int) where T <: Real
+    hypers_length::Int,
+    active_index::Int64) where T <: Real
     m = num_of_basis_funcitons
+    schur_buffer = SchurBuffer{T}(max_obs, num_of_basis_funcitons, active_index)
     return PreallocatedContainers{T}(
         zeros(T, 1, m),
         zeros(T, dim, m),
@@ -53,6 +95,7 @@ function PreallocatedContainers{T}(
         zeros(T, dim, dim),
         zeros(T, dim, dim),
         zeros(T, m, m),
-        zeros(T, max_obs, max_obs)
+        zeros(T, max_obs, max_obs),
+        schur_buffer
     )
 end

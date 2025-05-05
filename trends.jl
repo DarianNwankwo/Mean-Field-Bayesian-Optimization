@@ -12,7 +12,7 @@ function PolynomialTrend(ϕ::PolynomialBasisFunction, coefficients::Vector{T}, d
     return PolynomialTrend(
         ϕ,
         coefficients,
-        PreallocatedContainers{Float64}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT)
+        PreallocatedContainers{Float64}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT, NOT_IMPORTANT)
     )
 end
 
