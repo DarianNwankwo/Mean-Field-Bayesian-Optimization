@@ -1052,3 +1052,32 @@ function TestGriewank(d)
 
     return TestFunction(d, bounds, xopt, f, ∇f!)
 end
+
+
+# Utility: normalize any TestFunction to the unit hypercube [0,1]^d
+function normalize_testfn(tf::TestFunction)
+    lower, upper = get_bounds(tf)
+    Δ = upper .- lower
+
+    # Evaluate the original f at the mapped-back point
+    function f_unit(x)
+        x_orig = lower .+ Δ .* x
+        return tf.f(x_orig)
+    end
+
+    # Compute gradient w.r.t. scaled x
+    function ∇f_unit!(G, x)
+        x_orig = lower .+ Δ .* x
+        tf.∇f!(G, x_orig)
+        G .= G .* Δ
+        return G
+    end
+
+    # New bounds are [0,1]^d
+    bounds_unit = hcat(zeros(tf.dim), ones(tf.dim))
+
+    # Map original xopt into unit coordinates
+    xopt_unit = ((tf.xopt[1] .- lower) ./ Δ,)
+
+    return TestFunction(tf.dim, bounds_unit, xopt_unit, f_unit, ∇f_unit!)
+end

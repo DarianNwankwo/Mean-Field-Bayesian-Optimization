@@ -17,13 +17,13 @@ function parse_command_line(args)
             arg_type = Int
         "--starts"
             action = :store_arg
-            help = "Number of random starts for solving the acquisition function (default: 64)"
+            help = "Number of random starts for solving the acquisition function (default: 256)"
             default = 256
             arg_type = Int
         "--kernel-starts"
             action = :store_arg
             help = "Number of random starts for learning hyperparameters"
-            default = 16
+            default = 32
             arg_type = Int
         "--trials"
             action = :store_arg
@@ -192,6 +192,7 @@ function main()
             for (i, trend) in enumerate(function_trends)
                 # Augment the testfn with a trend
                 tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
+                tfn = normalize_testfn(tfn)
                 tft_name = function_trend_names[i]
 
                 minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
