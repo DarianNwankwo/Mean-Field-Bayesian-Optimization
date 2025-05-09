@@ -81,7 +81,7 @@ end
 function plus(
     tf::TestFunction,
     pt::PolynomialTrend;
-    M::Int = 256
+    M::Int = 2048
     )
     cf = CompositeFunction(tf, pt)
     barrier = TestFunctionBarrier(cf, composite_f, composite_∇f!)
