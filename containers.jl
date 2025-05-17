@@ -9,10 +9,13 @@ mutable struct SchurBuffer{T}
     d::Vector{T}  # size n: variable
     λ::Vector{T}  # size m: fixed
     active_index::Int64
+    valid::Bool
+    x::Vector{T}
 end
+invalidate!(buffer::SchurBuffer) = buffer.valid = false
 
 # TODO: Add resizing logic
-function SchurBuffer{T}(max_obs, num_basis_functions, active_index) where T
+function SchurBuffer{T}(max_obs, num_basis_functions, active_index, dim) where T
     return SchurBuffer{T}(
         zeros(T, max_obs, num_basis_functions),
         zeros(T, num_basis_functions, num_basis_functions),
@@ -23,7 +26,9 @@ function SchurBuffer{T}(max_obs, num_basis_functions, active_index) where T
         zeros(T, max_obs + num_basis_functions),
         zeros(T, max_obs),
         zeros(T, num_basis_functions),
-        active_index
+        active_index,
+        false,
+        zeros(T, dim)
     )
 end
 
@@ -61,6 +66,7 @@ struct PreallocatedContainers{T <: Real}
     Hz::Matrix{T}
     zz::Matrix{T} # Fixed size
     chol_workspace::Matrix{T}
+    yc::Vector{T}
     schur::SchurBuffer{T}
 end
 
@@ -71,7 +77,7 @@ function PreallocatedContainers{T}(
     hypers_length::Int,
     active_index::Int64) where T <: Real
     m = num_of_basis_funcitons
-    schur_buffer = SchurBuffer{T}(max_obs, num_of_basis_funcitons, active_index)
+    schur_buffer = SchurBuffer{T}(max_obs, num_of_basis_funcitons, active_index, dim)
     return PreallocatedContainers{T}(
         zeros(T, 1, m),
         zeros(T, dim, m),
@@ -96,6 +102,22 @@ function PreallocatedContainers{T}(
         zeros(T, dim, dim),
         zeros(T, m, m),
         zeros(T, max_obs, max_obs),
+        zeros(T, max_obs),
         schur_buffer
+    )
+end
+
+get_diff_x(pc::PreallocatedContainers{T}) where T <: Real = @view pc.diff_x[:]
+
+
+struct HybridMomentsContainer{T <: Real}
+    grad_μ::Vector{T}
+    grad_σ::Vector{T}
+end
+
+function HybridMomentsContainer{T}(dim::Int) where T <: Real
+    return HybridMomentsContainer(
+        zeros(T, dim),
+        zeros(T, dim)
     )
 end

@@ -1,44 +1,18 @@
-mutable struct SurrogateEvaluationCache # <: AbstractEvaluationCache
-    x::Vector{Float64}          # Last input used for evaluation
-    μ::Float64                  # Cached mean
-    σ::Float64                  # Cached standard deviation
-    ∇μ::Vector{Float64}         # Cached gradient of the mean
-    ∇σ::Vector{Float64}         # Cached gradient of the standard deviation
-    valid::Bool                 # Flag indicating if the cache is valid
-    updates::Int64
-end
 
-# Constructor for the cache, assuming dimension `d` for the input x.
-function SurrogateEvaluationCache(d::Int)
-    return SurrogateEvaluationCache(
-        zeros(d),
-        0.0,
-        0.0,
-        zeros(d),
-        zeros(d),
-        false,
-        0
-    )
-end
-invalidate!(cache::SurrogateEvaluationCache) = cache.valid = false
 
 function evaluate_moments_and_derivatives!(
     s::AbstractSurrogate,
     x::Vector{T},
     cache::SurrogateEvaluationCache;
-    atol=1e-6
+    atol=CACHE_SAME_X_TOLERANCE
 ) where T
     if cache.valid && all(abs.(x .- cache.x) .< atol)
         return (; μ=cache.μ, σ=cache.σ, ∇μ=cache.∇μ, ∇σ=cache.∇σ)
     end
-    # μ = predictive_mean(s, x, cache)
-    # σ = predictive_std(s, x, cache)
-    # ∇μ = predictive_mean_gradient(s, x, cache)
-    # ∇σ = predictive_std_gradient(s, x, cache)
     # If not, compute and update the cache.
     cache.updates += 1
-    μ, σ = compute_moments(s, x)
-    ∇μ, ∇σ = compute_moments_gradient(s, x)
+    μ, σ = compute_moments!(s, x, cache, atol=atol)
+    ∇μ, ∇σ = compute_moments_gradient!(s, x, cache, atol=atol)
 
     copyto!(cache.x, x)
     cache.μ = μ
@@ -69,8 +43,8 @@ get_name(::ExpectedImprovement) = EXPECTED_IMPROVEMENT_NAME
     s::AbstractSurrogate,
     ei::ExpectedImprovement,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
     σ2 = m.σ^2
     σ2 < EI_VARIANCE_TOLERANCE && return 0.
@@ -83,8 +57,8 @@ end
     s::AbstractSurrogate,
     ei::ExpectedImprovement,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     # Use the persistent cache to avoid recomputation.
     m = evaluate_moments_and_derivatives!(s, x, cache)
     σ2 = m.σ^2
@@ -119,8 +93,8 @@ get_name(::ProbabilityOfImprovement) = PROBABILITY_OF_IMPROVEMENT_NAME
     s::AbstractSurrogate,
     poi::ProbabilityOfImprovement,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
     σ2 = m.σ^2
     σ2 < POI_VARIANCE_TOLERANCE && return float(m.μ < poi.minimum)
@@ -132,8 +106,8 @@ end
     s::AbstractSurrogate,
     poi::ProbabilityOfImprovement,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
     σ2 = m.σ^2
     σ2 < POI_VARIANCE_TOLERANCE && return begin
@@ -154,8 +128,8 @@ get_name(::RandomSampler) = RANDOM_SAMPLER_NAME
     s::AbstractSurrogate,
     rs::RandomSampler,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
     return 0.
 end
@@ -164,8 +138,8 @@ end
     s::AbstractSurrogate,
     rs::RandomSampler,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache)
     return 0. * m.∇μ
 end
@@ -181,9 +155,9 @@ get_name(::UpperConfidenceBound) = UPPER_CONFIDENCE_BOUND_NAME
     s::AbstractSurrogate,
     ucb::UpperConfidenceBound,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
-    m = evaluate_moments_and_derivatives!(s, x, cache)
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
+    m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
     return -(m.μ + ucb.beta * m.σ)
 end
 
@@ -191,8 +165,8 @@ end
     s::AbstractSurrogate,
     ucb::UpperConfidenceBound,
     x::Vector{T},
-    cache::SurrogateEvaluationCache
-    ) where T <: Real
-    m = evaluate_moments_and_derivatives!(s, x, cache)
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE) where T <: Real
+    m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
     return -(m.∇μ + ucb.beta * m.∇σ)
 end

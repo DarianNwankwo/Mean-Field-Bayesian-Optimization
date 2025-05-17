@@ -15,8 +15,8 @@ function base_solve_nlopt(
     upper_bounds!(opt, spatial_ubs)
     
     # Set stopping criteria
-    xtol_rel!(opt, 1e-4)
-    ftol_rel!(opt, 1e-4)
+    xtol_rel!(opt, X_RELTOL)
+    ftol_rel!(opt, F_RELTOL)
     maxeval!(opt, 100)             # maximum number of evaluations/iterations
     # Optionally, set a time limit if NEWTON_SOLVE_TIME_LIMIT is defined:
     maxtime!(opt, NEWTON_SOLVE_TIME_LIMIT)

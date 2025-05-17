@@ -1,3 +1,33 @@
+mutable struct SurrogateEvaluationCache # <: AbstractEvaluationCache
+    x::Vector{Float64}          # Last input used for evaluation
+    μ::Float64                  # Cached mean
+    σ::Float64                  # Cached standard deviation
+    ∇μ::Vector{Float64}         # Cached gradient of the mean
+    ∇σ::Vector{Float64}         # Cached gradient of the standard deviation
+    valid::Bool                 # Flag indicating if the cache is valid
+    updates::Int64
+end
+
+# Constructor for the cache, assuming dimension `d` for the input x.
+function SurrogateEvaluationCache(d::Int)
+    return SurrogateEvaluationCache(
+        zeros(d),
+        0.0,
+        0.0,
+        zeros(d),
+        zeros(d),
+        false,
+        0
+    )
+end
+invalidate!(cache::SurrogateEvaluationCache) = cache.valid = false
+function should_reuse_computation(
+    cache::SurrogateEvaluationCache,
+    x::AbstractVector{<:Real},
+    atol=CACHE_SAME_X_TOLERANCE)
+    return cache.valid && all(abs.(x .- cache.x) .< atol)
+end  
+
 # Useful functions for grabbing desired attributes on our structs
 get_kernel(afs::AbstractSurrogate) = afs.ψ
 get_covariates(afs::AbstractSurrogate) = afs.X
@@ -21,12 +51,16 @@ get_dim(s::AbstractSurrogate) = size(s.X, 1)
 get_schur_buffer(s::AbstractSurrogate) = s.containers.schur
 
 
-function schur_reduced_system_solve(
+@timeit to "Schur System Solve" function schur_reduced_system_solve(
     L::AbstractMatrix{<:Real},
     PX::AbstractMatrix{<:Real},
     Px::AbstractMatrix{<:Real},
     KxX::AbstractVector{<:Real},
-    schur::SchurBuffer)
+    schur::SchurBuffer,
+    x::AbstractVector{<:Real})
+    if schur.valid && isequal(x, schur.x)
+        return schur.w
+    end
     # Preallocate scratch buffers
     n, m = size(PX)
     Y = get_Y(schur)
@@ -35,49 +69,40 @@ function schur_reduced_system_solve(
     r = get_r(schur)
 
     # term1: Y = L \ PX
-    @timeit to "schur solve term0" begin
-        copyto!(Y, PX)
-    end
-    
-    @timeit to "schur solve term1" begin
-        ldiv!(LowerTriangular(L), Y)
-    end
+    copyto!(Y, PX)    
+    ldiv!(LowerTriangular(L), Y)
+
 
     # term2: S = Y' * Y
-    @timeit to "schur solve term2" mul!(S, transpose(Y), Y)
+    mul!(S, transpose(Y), Y)
 
     # term3: r = Y'*(L \ KxX) - Px
-    @timeit to "schur solve term3" begin
-        copyto!(tmp, KxX)
-        ldiv!(LowerTriangular(L), tmp)
-        mul!(r, transpose(Y), tmp)
-        r .-= Px
-    end
+    copyto!(tmp, KxX)
+    ldiv!(LowerTriangular(L), tmp)
+    mul!(r, transpose(Y), tmp)
+    r .-= Px
 
     # term4: Cholesky factor of S
-    @timeit to "schur solve term4" fS = cholesky!(Hermitian(S))
+    fS = cholesky!(Hermitian(S))
 
     # term5: w1 = fS \ r  (in-place solve)
     w1 = get_w1(schur)
-    @timeit to "schur solve term5" begin
-        copyto!(w1, r)
-        ldiv!(fS, w1)
-    end
+    copyto!(w1, r)
+    ldiv!(fS, w1)
 
     # term6: w0 = L'\(L\(KxX - PX*w1))
     w0 = get_w0(schur)
-    @timeit to "schur solve term6" begin
-        copyto!(w0, KxX)
-        mul!(w0, PX, w1, -1.0, 1.0)     # w0 = KxX - PX*w1
-        ldiv!(LowerTriangular(L), w0)
-        ldiv!(UpperTriangular(L'), w0)
-    end
+    copyto!(w0, KxX)
+    mul!(w0, PX, w1, -1.0, 1.0)     # w0 = KxX - PX*w1
+    ldiv!(LowerTriangular(L), w0)
+    ldiv!(UpperTriangular(L'), w0)
 
     # term7: return concatenated solution
-    @timeit to "get_w" w = get_w(schur)
-    @timeit to "assign w1" w[1:length(w1)] .= w1
-    @timeit to "assign w2" w[length(w1)+1:length(w1) + schur.active_index] .= w0
-    @timeit to "schur solve term7" return w
+    w = get_w(schur)
+    w[1:length(w1)] .= w1
+    w[length(w1)+1:length(w1) + schur.active_index] .= w0
+    schur.valid = true
+    return w
 end
 
 """
@@ -96,7 +121,8 @@ we double our model's capacity.
 mutable struct HybridSurrogate{
     RBF <: StationaryKernel,
     PBF <: ParametricRepresentation,
-    PM <: ElasticPDMat} <: AbstractSurrogate
+    PM <: ElasticPDMat,
+    T <: Real} <: AbstractSurrogate
     ψ::RBF
     ϕ::PBF
     X::Matrix{Float64} # Covariates
@@ -110,7 +136,7 @@ mutable struct HybridSurrogate{
     observation_noise::Float64
     observed::Int
     capacity::Int
-    containers::PreallocatedContainers
+    containers::PreallocatedContainers{T}
 end
 
 get_parametric_basis_matrix(as::HybridSurrogate) = as.P
@@ -127,140 +153,47 @@ function Base.show(io::IO, s::HybridSurrogate{RBF}) where {RBF}
 end
 
 
-@doc raw"""
-    coefficient_solve(
-        KXX::AbstractMatrix{T1},
-        PX::AbstractMatrix{T2},
-        y::AbstractVector{T3}
-    ) where {T1 <: Real, T2 <: Real, T3 <: Real}
-
-Solves a system of linear equations involving a block matrix structure to
-compute coefficients `d` and `λ`. The block matrix equation has the following
-form:
-
-    [KXX   PX]   [d]   =   [y]
-    [PX^T   0]   [λ]       [0]
-
-In this equation:
-- `KXX` is a square matrix of size k_dim by k_dim.
-- `PX` is a rectangular matrix of size k_dim by p_dim.
-- `y` is a vector of length k_dim.
-- `d` is a vector of length k_dim, representing the solution coefficients for
-    the top block of the system.
-- `λ` is a vector of length p_dim, representing the solution coefficients for
-    the bottom block of the system.
-
-# Arguments
-- `KXX::AbstractMatrix{T1}`: A square matrix of size k_dim by k_dim,
-    representing part of the block structure.
-- `PX::AbstractMatrix{T2}`: A rectangular matrix of size k_dim by p_dim,
-    representing the coupling between the blocks.
-- `y::AbstractVector{T3}`: A vector of length k_dim, representing the right-hand
-    side of the system for the top block.
-
-# Returns
-- `d`: A vector of length k_dim, representing the solution coefficients for the
-    top block of the system.
-- `λ`: A vector of length p_dim, representing the solution coefficients for the
-    bottom block of the system.
-"""
-# function coefficient_solve(
-#     KXX::AbstractMatrix{T1},
-#     PX::AbstractMatrix{T2},
-#     y::AbstractVector{T3}) where {T1<:Real,T2<:Real,T3<:Real}
-#     p_dim, k_dim = size(PX, 2), size(KXX, 2)
-#     A = [KXX PX;
-#         PX' zeros(p_dim, p_dim)]
-#     F = lu(A)
-#     b = [y; zeros(p_dim)]
-#     w = F \ b
-#     d, λ = w[1:k_dim], w[k_dim+1:end]
-#     return d, λ
-# end
-
-# function coefficient_solve(
-#     L::AbstractMatrix{<:Real},
-#     PX::AbstractMatrix{<:Real},
-#     fx::AbstractVector{<:Real},
-#     schur::SchurBuffer)
-#     @timeit to "get buffers" begin
-#     d = get_d(schur)
-#     λ = get_λ(schur)
-#     Y = get_Y(schur)
-#     S = get_S(schur)
-#     r = get_r(schur)
-#     tmp = get_tmp(schur)
-#     end
-
-
-#     @timeit to "copyto" copyto!(Y, PX)
-#     # Y = L \ PX
-#     # TODO Can insert ElasticPDMat here
-#     @timeit to "ldvi LY" ldiv!(LowerTriangular(L), Y)
-#     # S = Y' * Y
-#     @timeit to "S" mul!(S, transpose(Y), Y)
-
-#     # r = PX' * (L' \ (L \ fx)), all in-place
-#     @timeit to "fx copy" copyto!(tmp, fx)
-#     @timeit to "ldiv tmp1" ldiv!(LowerTriangular(L), tmp)
-#     @timeit to "ldiv tmp2" ldiv!(UpperTriangular(L'), tmp)
-
-#     # Solve S * λ = r in-place
-#     @timeit to "mul S" mul!(r, transpose(PX), tmp)
-#     @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
-#     @timeit to "copy r" copyto!(λ, r)
-#     @timeit to "ldiv lambda" ldiv!(fS, λ)
-
-#     # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
-#     @timeit to "fx copy" copyto!(tmp, fx)
-#     @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
-#     @timeit to "ldiv tmp3" ldiv!(LowerTriangular(L), tmp)
-#     @timeit to "ldiv tmp4" ldiv!(UpperTriangular(L'), tmp)
-#     @timeit to "copy last" copyto!(d, tmp)
-
-#     @timeit to "return" return d, λ
-# end
-
 function coefficient_solve(
     L::ElasticPDMat,
     PX::AbstractMatrix{<:Real},
     fx::AbstractVector{<:Real},
     schur::SchurBuffer)
-    @timeit to "get buffers" begin
     d = get_d(schur)
     λ = get_λ(schur)
     Y = get_Y(schur)
     S = get_S(schur)
     r = get_r(schur)
     tmp = get_tmp(schur)
-    end
 
-
-    chol_view = view(L.chol)    
-    @timeit to "copyto" copyto!(Y, PX)
-    @timeit to "ldvi LY" ldiv!(chol_view.L, Y)
+    chol_view = view(L.chol)
+    copyto!(Y, PX)
+    # @timeit to "ldvi LY" ldiv!(chol_view.L, Y)
+    ldiv!(chol_view, Y) 
     # S = Y' * Y
-    @timeit to "S" mul!(S, transpose(Y), Y)
+    # mul!(S, transpose(Y), Y)
+    mul!(S, transpose(PX), Y)
 
     # r = PX' * (L' \ (L \ fx)), all in-place
-    @timeit to "fx copy" copyto!(tmp, fx)
-    @timeit to "ldiv tmp1" ldiv!(chol_view.L, tmp)
-    @timeit to "ldiv tmp2" ldiv!(chol_view.U, tmp)
+    copyto!(tmp, fx)
+    # @timeit to "ldiv tmp1" ldiv!(chol_view.L, tmp)
+    # @timeit to "ldiv tmp2" ldiv!(chol_view.U, tmp)
+    ldiv!(chol_view, tmp)
 
     # Solve S * λ = r in-place
-    @timeit to "mul S" mul!(r, transpose(PX), tmp)
-    @timeit to "cholesky S" fS = cholesky!(Hermitian(S))
-    @timeit to "copy r" copyto!(λ, r)
-    @timeit to "ldiv lambda" ldiv!(fS, λ)
+    mul!(r, transpose(PX), tmp)
+    fS = cholesky!(Hermitian(S))
+    copyto!(λ, r)
+    ldiv!(fS, λ)
 
     # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
-    @timeit to "fx copy" copyto!(tmp, fx)
-    @timeit to "mul px lambda" mul!(tmp, PX, λ, -1.0, 1.0)
-    @timeit to "ldiv tmp3" ldiv!(chol_view.L, tmp)
-    @timeit to "ldiv tmp4" ldiv!(chol_view.U, tmp)
-    @timeit to "copy last" copyto!(d, tmp)
+    copyto!(tmp, fx)
+    mul!(tmp, PX, λ, -1.0, 1.0)
+    # @timeit to "ldiv tmp3" ldiv!(chol_view.L, tmp)
+    # @timeit to "ldiv tmp4" ldiv!(chol_view.U, tmp)
+    ldiv!(chol_view, tmp)
+    copyto!(d, tmp)
 
-    @timeit to "return" return d, λ
+    return nothing
 end
 
 """
@@ -320,7 +253,7 @@ function HybridSurrogate(
     Linear system solve for learning coefficients of stochastic component and parametric
     component. 
     """
-    d, λ = coefficient_solve(
+    coefficient_solve(
         preallocated_L,
         PX,
         y,
@@ -328,10 +261,10 @@ function HybridSurrogate(
     )
 
     preallocated_d = zeros(T, capacity)
-    preallocated_d[1:length(d)] = d
+    preallocated_d[1:length(get_d(containers.schur))] = get_d(containers.schur)
 
-    λ_polynomial = zeros(T, length(λ))
-    λ_polynomial[:] = λ
+    λ_polynomial = zeros(T, length(get_λ(containers.schur)))
+    λ_polynomial[:] = get_λ(containers.schur)
 
     preallocated_y = zeros(T, capacity)
     preallocated_y[1:N] = y
@@ -395,7 +328,10 @@ function HybridSurrogate(
     )
 end
 
-mutable struct Surrogate{RBF<:StationaryKernel, PM <: ElasticPDMat} <: AbstractSurrogate
+mutable struct Surrogate{
+    RBF <: StationaryKernel,
+    PM <: ElasticPDMat,
+    T <: Real} <: AbstractSurrogate
     ψ::RBF
     X::Matrix{Float64}
     K::Matrix{Float64}
@@ -406,7 +342,7 @@ mutable struct Surrogate{RBF<:StationaryKernel, PM <: ElasticPDMat} <: AbstractS
     observation_noise::Float64
     observed::Int
     capacity::Int
-    containers::PreallocatedContainers
+    containers::PreallocatedContainers{T}
 end
 
 function Surrogate(
@@ -503,11 +439,13 @@ get_active_δKXX(s::AbstractSurrogate) = @view s.containers.δKXX[1:get_observed
 get_Hk(s::AbstractSurrogate) = @view s.containers.Hk[:, :]
 get_Hσ(s::AbstractSurrogate) = @view s.containers.Hσ[:, :]
 get_Hf(s::AbstractSurrogate) = @view s.containers.Hf[:, :]
-get_diff_x(s::AbstractSurrogate) = @view s.containers.diff_x[:]
+get_diff_x(s::AbstractSurrogate) = s.containers.diff_x
 get_Hz(s::AbstractSurrogate) = @view s.containers.Hz[:, :]
+get_yc(s::AbstractSurrogate) = @view s.containers.yc[1:get_observed(s)]
 get_px(s::HybridSurrogate) = @view s.containers.px[:, :]
 get_grad_px(s::HybridSurrogate) = @view s.containers.grad_px[:, :]
 get_zz(s::HybridSurrogate) = @view s.containers.zz[:, :]
+get_w(s::AbstractSurrogate) = @view s.containers.w[1:get_observed(s)]
 
 
 function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
@@ -517,32 +455,32 @@ function set_kernel!(s::Surrogate, kernel::RadialBasisFunction)
         s.ψ = kernel
         observation_noise = get_observation_noise(s)
         # Grab the buffer and update inplace
-        @timeit to "Assign Buffer" Kbuffer = s.L.mat
-        @timeit to "Set Kernel KXX" eval_KXX!(
+        K = get_active_covariance(s)
+        Kbuffer = s.L.mat
+        eval_KXX!(
             kernel,
             get_active_covariates(s),
-            Kbuffer,
+            K,
             get_diff_x(s)
         )
         # Ensures PSDness
-        @timeit to "Jitter Diag" for jj in 1:N Kbuffer[jj, jj] += (JITTER + observation_noise) end
+        for jj in 1:N K[jj, jj] += (JITTER + observation_noise) end
         copyto!(
-            s.K[1:N, 1:N],
-            Kbuffer
+            # s.K[1:N, 1:N],
+            # Kbuffer
+            Kbuffer,
+            K
         )
-        @timeit to "Scratchpad Assignment" copyto!(
+        copyto!(
             view(s.L.chol).factors,
             Kbuffer
         )
-        @timeit to "Compute Cholesky" cholesky!(Symmetric(view(s.L.chol).factors))
-        # cholesky!(view(s.L.chol).factors)
-        # s.d[1:N] = s.L \ get_active_observations(s)
-        # s.L \ get_active_observations(s)
-        @timeit to "Copy Observations" yc = copy(get_active_observations(s))
-        @timeit to "Inplace Coefficient Solve" ldiv!(s.L, yc)
-        @timeit to "Assign Coefficient Solve" s.d[1:N] .= yc
+        cholesky!(Symmetric(view(s.L.chol).factors))
+        yc = get_yc(s)
+        copyto!(yc, get_active_observations(s))
+        ldiv!(s.L, yc)
+        s.d[1:N] .= yc
     end
-    # println("Factors After: ", view(s.L.chol).factors)
 end
 
 
@@ -571,19 +509,15 @@ function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
             Kbuffer
         )
         cholesky!(Symmetric(view(s.L.chol).factors))
-        # s.L[1:N, 1:N] = LowerTriangular(
-        #     cholesky(
-        #         Hermitian(get_active_covariance(s))
-        #     ).L
-        # )
-        @timeit to "Hybrid Coefficient Solve" d, λ = coefficient_solve(
+        schur_buffer = get_schur_buffer(s)
+        @timeit to "Hybrid Coefficient Solve" coefficient_solve(
             s.L,
             get_active_parametric_basis_matrix(s),
             get_active_observations(s),
-            get_schur_buffer(s)
+            schur_buffer
         )
-        s.d[1:N] = d
-        s.λ[:] = λ
+        s.d[1:N] = get_d(schur_buffer)
+        s.λ[:] = get_λ(schur_buffer)
     end
 end
 
@@ -668,15 +602,16 @@ function set!(s::HybridSurrogate, X::Matrix{T}, y::Vector{T}) where {T<:Real}
             # s.P[1:N, 1:length(ϕ)])
         # PX = s.P[1:N, 1:length(ϕ)]
         # s.P[1:N, 1:length(ϕ)] = PX
-        d, λ = coefficient_solve(
+        schur_buffer = get_schur_buffer(s)
+        coefficient_solve(
             # view(s.L.chol).L,
             s.L,
             get_active_parametric_basis_matrix(s),
             y,
             get_schur_buffer(s)
         )
-        s.d[1:N] = d
-        s.λ[1:length(get_parametric_basis_function(s))] = λ
+        s.d[1:N] = get_d(schur_buffer)
+        s.λ[1:length(get_parametric_basis_function(s))] = get_λ(schur_buffer)
         s.y[1:N] = y
     end
 end
@@ -788,15 +723,16 @@ function update_coefficients!(s::HybridSurrogate)
     KXX = get_active_covariance(s)
     PX = get_active_parametric_basis_matrix(s)
     y = get_active_observations(s)
-    d, λ = coefficient_solve(
+    schur_buffer = get_schur_buffer(s)
+    coefficient_solve(
         s.L,
         PX,
         y,
-        get_schur_buffer(s)
+        schur_buffer
     )
     @views begin
-        s.d[1:length(d)] = d
-        s.λ[:] = λ
+        s.d[1:length(get_d(schur_buffer))] = get_d(schur_buffer)
+        s.λ[:] = get_λ(schur_buffer)
     end
 end
 
@@ -804,9 +740,11 @@ end
 function update_coefficients!(s::Surrogate)
     update_index = get_observed(s)
     @views begin
-        # L = s.L[1:update_index, 1:update_index]
-        # s.d[1:update_index] = L' \ (L \ s.y[1:update_index])
-        s.d[1:update_index] = s.L \ s.y[1:update_index]
+        yc = get_yc(s)
+        copyto!(yc, s.y[1:update_index])
+        ldiv!(s.L, yc)
+        # s.d[1:update_index] = s.L \ s.y[1:update_index]
+        s.d[1:update_index] .= yc
     end
 end
 
@@ -831,7 +769,6 @@ function condition!(s::HybridSurrogate, xnew::Vector{T}, ynew::T) where {T<:Real
     insert!(s, xnew, ynew) # Updates covariate matrix X and observation vector y
     increment!(s)
     update_covariance!(s, xnew) # Updates covariance matrix K
-    # update_cholesky!(s) # Updates cholesky factorization matrix L
     update_parametric_design_matrix!(s) # Updates parametric design matrix P
     update_coefficients!(s) # Updates coefficients d, λ
     return s
@@ -845,30 +782,30 @@ function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where {T<:Real}
     insert!(s, xnew, ynew)
     increment!(s)
     update_covariance!(s, xnew)
-    # update_cholesky!(s)
     update_coefficients!(s)
     return s
 end
 
-function predictive_mean(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Mean" function predictive_mean(
+    s::HybridSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.μ end
     d = get_active_coefficients(s)
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
-    )
+    kx = eval_KxX!(get_kernel(s), x, get_active_covariates(s), get_active_KxX(s), get_diff_x(s))
     λ = get_parametric_component_coefficients(s)
-    px = eval_basis!(
-        get_parametric_basis_function(s),
-        x,
-        get_px(s)
-    )
-    return dot(kx, d) + dot(px, λ)
+    px = eval_basis!(get_parametric_basis_function(s), x, get_px(s))
+    cache.μ = dot(kx, d) + dot(px, λ)
+    return cache.μ
 end
 
-function predictive_mean_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Mean Gradient" function predictive_mean_gradient!(
+    s::HybridSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.∇μ end
     d = get_active_coefficients(s)
     λ = get_parametric_component_coefficients(s)
     ∇kx = eval_∇KxX!(
@@ -883,10 +820,21 @@ function predictive_mean_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
         x,
         get_grad_px(s)
     )
-    return ∇kx * d + ∇px * λ
+    # Clear out
+    fill!(cache.∇μ, 0.0)
+    # out = ∇kx * d
+    mul!(cache.∇μ, ∇kx, d)
+    # out += ∇px * λ
+    mul!(cache.∇μ, ∇px, λ, 1.0, 1.0)
+    return cache.∇μ
 end
 
-@timeit to "Hybrid Predictive Std" function predictive_std(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Std" function predictive_std(
+    s::HybridSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.σ end
     kx = eval_KxX!(
         get_kernel(s),
         x,
@@ -899,120 +847,135 @@ end
         x,
         get_px(s)
     )
-    v = vcat(vec(px), kx)
     P = get_active_parametric_basis_matrix(s)   
     w = schur_reduced_system_solve(
         get_active_cholesky(s),
         P,
         px,
         kx,
-        get_schur_buffer(s)
+        get_schur_buffer(s),
+        x
     )
-     
+    w0 = get_w0(get_schur_buffer(s))
+    w1 = get_w1(get_schur_buffer(s))
+    # TODO: Can do inplace operations here with mul!
+    dot_px = dot(px, w1)
+    dot_kx = dot(kx, w0)
     k0 = get_kernel(s)(0.)
-    return sqrt(k0 - dot(v, w))
+    # return sqrt(k0 - dot(v, w))
+    cache.σ = sqrt(k0 - (dot_px + dot_kx))
+    return cache.σ
 end
 
-@timeit to "Hybrid Predictive Std Gradient" function predictive_std_gradient(s::HybridSurrogate, x::AbstractVector{<:Real})
+@timeit to "Hybrid Std Gradient" function predictive_std_gradient!(
+    s::HybridSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.∇σ end
+    @views begin
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
-    )
-    px = eval_basis!(
-        get_parametric_basis_function(s),
-        x,
-        get_px(s)
-    )
-    ∇px = eval_∇basis!(
-        get_parametric_basis_function(s),
-        x,
-        get_grad_px(s)
-    )
-    ∇kx = eval_∇KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_grad_KxX(s),
-        get_diff_x(s)
-    )
-    w = schur_reduced_system_solve(
-        get_active_cholesky(s),
-        P,
-        px,
-        kx,
-        get_schur_buffer(s)
-    )
-    ∇v = hcat(∇px, ∇kx)
-    σ = predictive_std(s, x)
-    return -(∇v * w) / σ
+    kx = eval_KxX!(get_kernel(s), x, get_active_covariates(s), get_active_KxX(s), get_diff_x(s))
+    px = eval_basis!(get_parametric_basis_function(s), x, get_px(s))
+    ∇px = eval_∇basis!(get_parametric_basis_function(s), x, get_grad_px(s))
+    ∇kx = eval_∇KxX!(get_kernel(s), x, get_active_covariates(s), get_active_grad_KxX(s), get_diff_x(s))
+    w = schur_reduced_system_solve(get_active_cholesky(s), P, px, kx, get_schur_buffer(s), x)
+    dim = length(cache.∇σ)
+    w0 = get_w0(get_schur_buffer(s))
+    w1 = get_w1(get_schur_buffer(s))
+    # ∇σ = ∇px * w1
+    for i in 1:size(∇px, 1) cache.∇σ[i] = dot(∇px[i, :], w1) end
+    # ∇σ = ∇px * w1 + ∇kx * w0
+    for i in 1:size(∇kx, 1) cache.∇σ[i] += dot(∇kx[i, :], w0) end
+    σ = predictive_std(s, x, cache)
+    
+    # ∇σ = (∇px * w1 + ∇kx * w0) / σ
+    @inbounds @simd for i in 1:dim cache.∇σ[i] = cache.∇σ[i] / σ end
+    # ∇σ = -(∇px * w1 + ∇kx * w0) / σ
+    cache.∇σ .*= -1.
+    return cache.∇σ
+    end
 end
 
-function predictive_mean(s::Surrogate, x::AbstractVector{<:Real})
+@timeit to "Standard Mean" function predictive_mean(
+    s::Surrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.μ end
     c = get_active_coefficients(s)
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
-    )
+    kx = eval_KxX!(get_kernel(s), x, get_active_covariates(s), get_active_KxX(s), get_diff_x(s))
+    cache.μ = dot(kx, c)
     return dot(kx, c)
 end
 
-function predictive_mean_gradient(s::Surrogate, x::AbstractVector{<:Real})
+@timeit to "Standard Mean Gradient" function predictive_mean_gradient!(
+    s::Surrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.∇μ end
     c = get_active_coefficients(s)
-    ∇kx = eval_∇KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_grad_KxX(s),
-        get_diff_x(s)
-    )
-    return ∇kx * c
+    ∇kx = eval_∇KxX!(get_kernel(s), x, get_active_covariates(s), get_active_grad_KxX(s), get_diff_x(s))
+    mul!(cache.∇μ, ∇kx, c)
+    return cache.∇μ
 end
 
-function predictive_std(s::Surrogate, x::AbstractVector{<:Real})
+@timeit to "Standard Std" function predictive_std(
+    s::Surrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.σ end
     k0 = get_kernel(s)(0.)
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
-    )
-    w = copy(kx)
+    kx = eval_KxX!(get_kernel(s), x, get_active_covariates(s), get_active_KxX(s), get_diff_x(s))
+    w = get_w(s)
+    copyto!(w, kx)
     ldiv!(s.L, w)
-    return sqrt(k0 - dot(kx, w))
+    cache.σ = sqrt(k0 - dot(kx, w))
+    return cache.σ
 end
 
-function predictive_std_gradient(s::Surrogate, x::AbstractVector{<:Real})
-    kx = eval_KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_KxX(s),
-        get_diff_x(s)
-    )
-    ∇kx = eval_∇KxX!(
-        get_kernel(s),
-        x,
-        get_active_covariates(s),
-        get_active_grad_KxX(s),
-        get_diff_x(s)
-    )
-    σ = predictive_std(s, x)
-    w = copy(kx)
+@timeit to "Standard Std Gradient" function predictive_std_gradient!(
+    s::Surrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    if should_reuse_computation(cache, x, atol) return cache.∇σ end
+    kx = eval_KxX!(get_kernel(s), x, get_active_covariates(s), get_active_KxX(s), get_diff_x(s))
+    ∇kx = eval_∇KxX!(get_kernel(s), x, get_active_covariates(s), get_active_grad_KxX(s), get_diff_x(s))
+    σ = predictive_std(s, x, cache, atol=atol)
+    w = get_w(s)
+    copyto!(w, kx)
     ldiv!(s.L, w)
-    return -(∇kx * w) / σ
+    mul!(cache.∇σ, ∇kx, w)
+    cache.∇σ ./= σ
+    cache.∇σ .*= -1.
+    return cache.∇σ
 end
 
-compute_moments(s::AbstractSurrogate, x) = (predictive_mean(s, x), predictive_std(s, x))
-compute_moments_gradient(s::AbstractSurrogate, x) = (predictive_mean_gradient(s, x), predictive_std_gradient(s, x))
+function compute_moments!(
+    s::AbstractSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    μ = predictive_mean(s, x, cache, atol=atol)
+    σ = predictive_std(s, x, cache, atol=atol)
+    return (μ, σ)
+end
+
+
+function compute_moments_gradient!(
+    s::AbstractSurrogate,
+    x::AbstractVector{<:Real},
+    cache::SurrogateEvaluationCache;
+    atol=CACHE_SAME_X_TOLERANCE)
+    ∇μ = predictive_mean_gradient!(s, x, cache, atol=atol)
+    ∇σ = predictive_std_gradient!(s, x, cache, atol=atol)
+
+    return (∇μ, ∇σ)
+end
 
 
 # ------------------------------------------------------------------
@@ -1088,8 +1051,8 @@ function optimize!(
     upper_bounds!(opt, upperbounds)
     
     # Set stopping criteria
-    xtol_rel!(opt, 1e-4)
-    ftol_rel!(opt, 1e-4)
+    xtol_rel!(opt, X_RELTOL)
+    ftol_rel!(opt, F_RELTOL)
     maxeval!(opt, 100)             # maximum number of evaluations/iterations
     # Optionally, set a time limit if NEWTON_SOLVE_TIME_LIMIT is defined:
     maxtime!(opt, NEWTON_SOLVE_TIME_LIMIT)
@@ -1098,7 +1061,8 @@ function optimize!(
         # if length(grad) > 0
         #     @timeit to "Grad Log Likelihood" grad[:] = ∇log_likelihood(s)
         # end
-        @timeit to "Set Kernel Hypers" set_kernel!(s, set_hyperparameters!(get_kernel(s), θ))
+        set_hyperparameters!(get_kernel(s), θ)
+        @timeit to "Set Kernel on Surrogate" set_kernel!(s, get_kernel(s))
         @timeit to "Log Likelihood" res = log_likelihood(s)
         return res
     end

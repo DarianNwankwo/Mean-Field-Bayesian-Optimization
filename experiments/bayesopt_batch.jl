@@ -191,71 +191,80 @@ function main()
         for strategy in strategies
             for (i, trend) in enumerate(function_trends)
                 # Augment the testfn with a trend
-                tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
-                tfn = normalize_testfn(tfn)
-                tft_name = function_trend_names[i]
+                try
+                    tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
+                    tfn = normalize_testfn(tfn)
+                    tft_name = function_trend_names[i]
 
-                minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
-                write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
+                    minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
+                    write_global_minimizer_to_disk(minimizer_path_prefix, tfn)
 
-                for (j, surrogate) in enumerate(surrogates)
-                    st_name = surrogate_trend_names[j]
+                    for (j, surrogate) in enumerate(surrogates)
+                        st_name = surrogate_trend_names[j]
 
-                    # Extract minimizer from testfunction
-                    actual_minimum = tfn(tfn.xopt[1])
-                    num_initial_observations = ios[j]
+                        # Extract minimizer from testfunction
+                        actual_minimum = tfn(tfn.xopt[1])
+                        num_initial_observations = ios[j]
 
-                    # Construct path to directory maintaining current experiments data
-                    path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$(get_name(strategy))/"
-                    
-                    println("Beginning Randomized Trials: ")
-                    for trial in 1:cli_args["trials"]
-                        try
-                            print("$trial.) $(st_name)\n")
-                            # Gather initial design for our statistical model
-                            Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
-                            yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
-                            
-                            # Set the correct entries in the preallocated surrogate
-                            set!(surrogate, Xinit, yinit)
+                        # Construct path to directory maintaining current experiments data
+                        path_prefix = "$current_directory/data/$testfn_name/$tft_name/$st_name/$(get_name(strategy))/"
+                        
+                        println("Beginning Randomized Trials: ")
+                        for trial in 1:cli_args["trials"]
+                            try
+                                print("$trial.) $(st_name)\n")
+                                # Gather initial design for our statistical model
+                                Xinit = randsample(num_initial_observations, tfn.dim, spatial_lbs, spatial_ubs)
+                                yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
+                                
+                                # Set the correct entries in the preallocated surrogate
+                                set!(surrogate, Xinit, yinit)
 
-                            # Perform Bayesian optimization loop
-                            surrogate = bayesian_optimize!(
-                                surrogate,
-                                strategy,
-                                tfn,
-                                spatial_lbs,
-                                spatial_ubs,
-                                kernel_lbs,
-                                kernel_ubs,
-                                cli_args["budget"],
-                                xnext,
-                                cli_args["starts"],
-                                cli_args["kernel-starts"]
-                            )
+                                # Perform Bayesian optimization loop
+                                surrogate = bayesian_optimize!(
+                                    surrogate,
+                                    strategy,
+                                    tfn,
+                                    spatial_lbs,
+                                    spatial_ubs,
+                                    kernel_lbs,
+                                    kernel_ubs,
+                                    cli_args["budget"],
+                                    xnext,
+                                    cli_args["starts"],
+                                    cli_args["kernel-starts"]
+                                )
 
-                            # Extract performance metrics
-                            observations = get_active_observations(surrogate)
-                            get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
-                            update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
-                            update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
+                                # Extract performance metrics
+                                observations = get_active_observations(surrogate)
+                                get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
+                                update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
+                                update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
 
-                            # Write performance metrics to disk.
-                            write_gaps_to_disk(path_prefix, gaps, trial)
-                            write_observations_to_disk(path_prefix, observations, trial)
-                            write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
-                            write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
+                                # Write performance metrics to disk.
+                                write_gaps_to_disk(path_prefix, gaps, trial)
+                                write_observations_to_disk(path_prefix, observations, trial)
+                                write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
+                                write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
 
-                        catch e
-                            err_dir = "$current_directory/data/$testfn_name"
-                            mkpath(err_dir)
-                            open("$err_dir/error_trial_$(trial).txt", "w+") do io
-                                println(io, "Trial #$(trial) Error: ", sprint(showerror, e, catch_backtrace()))
+                            catch e
+                                err_dir = path_prefix
+                                mkpath(err_dir)
+                                open("$err_dir/error_trial_$(trial).txt", "w+") do io
+                                    println(io, "Trial #$(trial) Error: ", sprint(showerror, e, catch_backtrace()))
+                                end
                             end
                         end
+                        println()
+                        flush(stdout)
                     end
-                    println()
-                    flush(stdout)
+                catch e
+                    err_dir = "$current_directory/data/$testfn_name"
+                    mkpath(err_dir)
+                    open("$err_dir/error_testfn_$(function_trend_names[i]).txt", "w+") do io
+                        println(io, "Trend: $(function_trends[i])")
+                        println(io, "Adding Trend to Test Function Error: ", sprint(showerror, e, catch_backtrace()))
+                    end
                 end
             end
         end

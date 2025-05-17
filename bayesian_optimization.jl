@@ -29,13 +29,13 @@ include("containers.jl")
 include("radial_basis_functions.jl")
 include("polynomial_basis_functions.jl")
 include("trends.jl")
-include("decision_rules.jl")
 include("surrogates.jl")
+include("decision_rules.jl")
 include("rbf_optim.jl")
 include("utils.jl")
 
 
-function bayesian_optimize!(
+@timeit to "bayesian_optimize!" function bayesian_optimize!(
     surrogate::AbstractSurrogate,
     decision_rule::AbstractDecisionRule,
     testfn::TestFunction,
@@ -53,9 +53,9 @@ function bayesian_optimize!(
 
     # println("Performing Bayesian Optimization for $budget Iterations")
     print("Progress: ")
-    for i in 1:budget
+    @timeit to "BO Loop" for i in 1:budget
         print("|")
-        setparams!(decision_rule, surrogate)
+        @timeit to "Update Acquisition Funciton Parameters" setparams!(decision_rule, surrogate)
         @timeit to "Multistart Acquisition Solve" multistart_base_solve!(
             surrogate,
             decision_rule,
@@ -65,11 +65,10 @@ function bayesian_optimize!(
             cache,
             inner_optimizer_restarts
         )
-        invalidate!(cache)
-        ynext = testfn(xnext) + get_observation_noise(surrogate)
-        surrogate = condition!(surrogate, xnext, ynext)
-        print("-")
-        optimize!(
+        @timeit to "Invalidate Cache" invalidate!(cache)
+        @timeit to "Observe Black-Box Function" ynext = testfn(xnext) + get_observation_noise(surrogate) * randn()
+        @timeit to "Condition on New Observation" surrogate = condition!(surrogate, xnext, ynext)
+        @timeit to "Optimize Hyperparameters" optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
             upperbounds=kernel_ubs,

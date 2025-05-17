@@ -208,8 +208,22 @@ function randsample(N, d, lbs, ubs)
     return X
 end
 
-function gap(initial_best::T, observed_best::T, actual_best::T) where T <: Real
-    return (initial_best - observed_best) / (initial_best - actual_best)
+
+function gap(f_init::T, f_best::T, f_star::T; gap_tol::T = F_RELTOL) where T <: Real
+    total_possible_improvement = f_init - f_star
+    actual_improvement = f_init - f_best
+
+    # Case 1: Already close to the best possible value
+    if abs(total_possible_improvement) < gap_tol
+        return T(1.0)  # No room for meaningful improvement
+    end
+
+    # Case 2: Found better than expected (possibly due to error in f*)
+    if f_best < f_star
+        return T(1.0)
+    end
+
+    return actual_improvement / total_possible_improvement
 end
 
 function update_gaps!(gaps::AbstractVector{T}, observations::AbstractVector{T}, actual_best::T; start_index::Int = 1) where T <: Real

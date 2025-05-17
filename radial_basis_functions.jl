@@ -23,7 +23,7 @@ function Base.show(io::IO, r::RadialBasisFunction{T}) where T
     print(io, "RadialBasisFunction{", T, "}")
 end
 
-(rbf::RadialBasisFunction)(ρ::Real) = rbf.ψ(ρ, rbf.θ)
+@inline (rbf::RadialBasisFunction)(ρ::Real) = rbf.ψ(ρ, rbf.θ)
 derivative(rbf::RadialBasisFunction) = rbf.Dρ_ψ
 second_derivative(rbf::RadialBasisFunction) = rbf.Dρρ_ψ
 hypersgradient(rbf::RadialBasisFunction) = rbf.∇θ_ψ!
@@ -154,7 +154,6 @@ function eval_KXX!(
                 @simd for k=1:d
                     diff[k] = X[k, i] - X[k, j]
                 end
-                # norm_diff = norm(diff)
                 norm_diff = sqrt(dot(diff, diff))
                 KXX[i,j] = rbf(norm_diff)
                 KXX[j,i] = KXX[i, j]
@@ -164,12 +163,6 @@ function eval_KXX!(
 
     return KXX
 end
-
-(rbf::RadialBasisFunction)(
-    X::AbstractMatrix{T},
-    KXX::AbstractMatrix{T},
-    diff::AbstractVector{T}
-) where T <: Real = eval_KXX!(rbf, X, KXX, diff)
 
 
 function eval_KxX!(
