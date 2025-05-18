@@ -51,7 +51,7 @@ get_dim(s::AbstractSurrogate) = size(s.X, 1)
 get_schur_buffer(s::AbstractSurrogate) = s.containers.schur
 
 
-@timeit to "Schur System Solve" function schur_reduced_system_solve(
+function schur_reduced_system_solve(
     L::AbstractMatrix{<:Real},
     PX::AbstractMatrix{<:Real},
     Px::AbstractMatrix{<:Real},
@@ -167,7 +167,6 @@ function coefficient_solve(
 
     chol_view = view(L.chol)
     copyto!(Y, PX)
-    # @timeit to "ldvi LY" ldiv!(chol_view.L, Y)
     ldiv!(chol_view, Y) 
     # S = Y' * Y
     # mul!(S, transpose(Y), Y)
@@ -175,8 +174,6 @@ function coefficient_solve(
 
     # r = PX' * (L' \ (L \ fx)), all in-place
     copyto!(tmp, fx)
-    # @timeit to "ldiv tmp1" ldiv!(chol_view.L, tmp)
-    # @timeit to "ldiv tmp2" ldiv!(chol_view.U, tmp)
     ldiv!(chol_view, tmp)
 
     # Solve S * λ = r in-place
@@ -188,8 +185,6 @@ function coefficient_solve(
     # 5) Solve for d = L' \ (L \ (fx - PX*λ)) in-place
     copyto!(tmp, fx)
     mul!(tmp, PX, λ, -1.0, 1.0)
-    # @timeit to "ldiv tmp3" ldiv!(chol_view.L, tmp)
-    # @timeit to "ldiv tmp4" ldiv!(chol_view.U, tmp)
     ldiv!(chol_view, tmp)
     copyto!(d, tmp)
 
@@ -510,7 +505,7 @@ function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
         )
         cholesky!(Symmetric(view(s.L.chol).factors))
         schur_buffer = get_schur_buffer(s)
-        @timeit to "Hybrid Coefficient Solve" coefficient_solve(
+        coefficient_solve(
             s.L,
             get_active_parametric_basis_matrix(s),
             get_active_observations(s),
@@ -786,7 +781,7 @@ function condition!(s::Surrogate, xnew::Vector{T}, ynew::T) where {T<:Real}
     return s
 end
 
-@timeit to "Hybrid Mean" function predictive_mean(
+function predictive_mean(
     s::HybridSurrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -800,7 +795,7 @@ end
     return cache.μ
 end
 
-@timeit to "Hybrid Mean Gradient" function predictive_mean_gradient!(
+function predictive_mean_gradient!(
     s::HybridSurrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -829,7 +824,7 @@ end
     return cache.∇μ
 end
 
-@timeit to "Hybrid Std" function predictive_std(
+function predictive_std(
     s::HybridSurrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -867,7 +862,7 @@ end
     return cache.σ
 end
 
-@timeit to "Hybrid Std Gradient" function predictive_std_gradient!(
+function predictive_std_gradient!(
     s::HybridSurrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -898,7 +893,7 @@ end
     end
 end
 
-@timeit to "Standard Mean" function predictive_mean(
+function predictive_mean(
     s::Surrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -910,7 +905,7 @@ end
     return dot(kx, c)
 end
 
-@timeit to "Standard Mean Gradient" function predictive_mean_gradient!(
+function predictive_mean_gradient!(
     s::Surrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -922,7 +917,7 @@ end
     return cache.∇μ
 end
 
-@timeit to "Standard Std" function predictive_std(
+function predictive_std(
     s::Surrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -937,7 +932,7 @@ end
     return cache.σ
 end
 
-@timeit to "Standard Std Gradient" function predictive_std_gradient!(
+function predictive_std_gradient!(
     s::Surrogate,
     x::AbstractVector{<:Real},
     cache::SurrogateEvaluationCache;
@@ -981,7 +976,7 @@ end
 # ------------------------------------------------------------------
 # Operations for computing optimal hyperparameters.
 # ------------------------------------------------------------------
-function logabsdet_M(s::HybridSurrogate)
+function logabsdet_M2(s::HybridSurrogate)
     # Get active pieces
     L = get_active_cholesky(s)         # LowerTriangular from cholesky(K)
     K = get_active_covariance(s)       # n × n
@@ -989,17 +984,24 @@ function logabsdet_M(s::HybridSurrogate)
     zz = get_zz(s)                     # m × m
 
     # Step 1: log|det(K)|
-    diagL = diag(L)
-    logabsdetK = 2 * sum(log, diagL)
+    # diagL = diag(L)
+    # logabsdetK = 2 * sum(log, diagL)
+    logabsdetK = 0.
+    for i in 1:size(L, 2)
+        logabsdetK += log(L[i, i])
+    end
+    logabsdetK *= 2.
 
-    # Step 2: form S = zz - P^T K^{-1} P
+    # Step 2: form S = zz - P^T K^{-1} P = zz - (P^T L^-T) (L ^-1 P)
     Y = get_Y(get_schur_buffer(s))
     copyto!(Y, P)
     ldiv!(LowerTriangular(L), Y)
     
     S = get_S(get_schur_buffer(s))
-    copyto!(S, zz)
-    mul!(S, transpose(Y), Y, -1., 1.)
+    # copyto!(S, zz)
+    # mul!(S, transpose(Y), Y, -1., 1.)
+    mul!(S, transpose(Y), Y)
+    S .*= -1.
 
     # Step 3: log|det(S)|
     logabsdetS = log(abs(det(S)))
@@ -1007,13 +1009,15 @@ function logabsdet_M(s::HybridSurrogate)
     return logabsdetK + logabsdetS
 end
 
+
 function log_likelihood(s::HybridSurrogate)
     n = get_observed(s)
     m = length(get_parametric_basis_function(s))
-    yz = [get_active_observations(s); zeros(m)]
+    # yz = [get_active_observations(s); zeros(m)]
+    yz = get_active_observations(s)
     d = get_active_coefficients(s)
     λ = get_parametric_component_coefficients(s)
-    dλ = vcat(d, λ)
+    # dλ = vcat(d, λ)
     P = get_active_parametric_basis_matrix(s)
     K = get_active_covariance(s)
     zz = get_zz(s)
@@ -1024,7 +1028,8 @@ function log_likelihood(s::HybridSurrogate)
     #      P  K])
     # ladM = log(abs(det(M)))
 
-    return -dot(yz, dλ) / 2 - n * log(2π) / 2 - ladM
+    # return -dot(yz, dλ) / 2 - n * log(2π) / 2 - ladM
+    return -dot(yz, d) / 2 - n * log(2π) / 2 - ladM
 end
 
 
@@ -1062,8 +1067,8 @@ function optimize!(
         #     @timeit to "Grad Log Likelihood" grad[:] = ∇log_likelihood(s)
         # end
         set_hyperparameters!(get_kernel(s), θ)
-        @timeit to "Set Kernel on Surrogate" set_kernel!(s, get_kernel(s))
-        @timeit to "Log Likelihood" res = log_likelihood(s)
+        set_kernel!(s, get_kernel(s))
+        res = log_likelihood(s)
         return res
     end
     
@@ -1073,7 +1078,7 @@ function optimize!(
 
     for θ in seq
         NLopt.max_objective!(opt, nlopt_obj)
-        @timeit to "NLopt Hypers" f_max, θ_max, ret = NLopt.optimize(
+        f_max, θ_max, ret = NLopt.optimize(
             opt, convert(Vector, θ)
         )
         if f_max > maxf

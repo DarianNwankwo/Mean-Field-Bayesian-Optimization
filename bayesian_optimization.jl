@@ -20,7 +20,7 @@ using ElasticPDMats
 using DiffResults
 using BayesianOptimization
 
-const to = TimerOutput()
+
 
 include("constants.jl")
 include("types.jl")
@@ -35,7 +35,7 @@ include("rbf_optim.jl")
 include("utils.jl")
 
 
-@timeit to "bayesian_optimize!" function bayesian_optimize!(
+function bayesian_optimize!(
     surrogate::AbstractSurrogate,
     decision_rule::AbstractDecisionRule,
     testfn::TestFunction,
@@ -53,10 +53,10 @@ include("utils.jl")
 
     # println("Performing Bayesian Optimization for $budget Iterations")
     print("Progress: ")
-    @timeit to "BO Loop" for i in 1:budget
+    for i in 1:budget
         print("|")
-        @timeit to "Update Acquisition Funciton Parameters" setparams!(decision_rule, surrogate)
-        @timeit to "Multistart Acquisition Solve" multistart_base_solve!(
+        setparams!(decision_rule, surrogate)
+        multistart_base_solve!(
             surrogate,
             decision_rule,
             xnext,
@@ -65,10 +65,10 @@ include("utils.jl")
             cache,
             inner_optimizer_restarts
         )
-        @timeit to "Invalidate Cache" invalidate!(cache)
-        @timeit to "Observe Black-Box Function" ynext = testfn(xnext) + get_observation_noise(surrogate) * randn()
-        @timeit to "Condition on New Observation" surrogate = condition!(surrogate, xnext, ynext)
-        @timeit to "Optimize Hyperparameters" optimize!(
+        invalidate!(cache)
+        ynext = testfn(xnext) + get_observation_noise(surrogate) * randn()
+        surrogate = condition!(surrogate, xnext, ynext)
+        optimize!(
             surrogate,
             lowerbounds=kernel_lbs,
             upperbounds=kernel_ubs,
