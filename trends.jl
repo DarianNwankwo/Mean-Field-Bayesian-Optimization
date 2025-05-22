@@ -81,7 +81,7 @@ end
 function plus(
     tf::TestFunction,
     pt::PolynomialTrend;
-    M::Int = 2048
+    M::Int64 = 4096
     )
     cf = CompositeFunction(tf, pt)
     barrier = TestFunctionBarrier(cf, composite_f, composite_∇f!)
@@ -90,7 +90,7 @@ function plus(
     # The global minimizer is subject to shifting, so we find the global minimizer
     # algorithmically.
     lbs, ubs = get_bounds(tf)
-    minf = tf(tf.xopt[1])
+    minf = tf(tf.xopt[1]) + pt(tf.xopt[1])
     minx = tf.xopt[1]
     seq = ScaledLHSIterator(lbs, ubs, M)
 
