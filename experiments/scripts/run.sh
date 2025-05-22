@@ -2,9 +2,9 @@
 
 # Experimental configuration
 RANDOM_SEED=1906
-RANDOM_RESTARTS=2
-NUMBER_OF_TRIALS=2
-BAYESIAN_OPTIMIZATION_LOOP_BUDGET=2
+RANDOM_RESTARTS=256
+NUMBER_OF_TRIALS=50
+BAYESIAN_OPTIMIZATION_LOOP_BUDGET=100
 SHOULD_OPTIMIZE=1
 
 # Array of test function names
@@ -24,6 +24,15 @@ function_names=(
   "hartmann6d"
   "griewank3d"
   "shekel4d"
+  "beale"
+  "easom"
+  "bukinn6"
+  "crossintray"
+  "eggholder"
+  "holdertable"
+  "levyn13"
+  "bohachevsky"
+  "dropwave"
 )
 
 > timing.txt
