@@ -67,6 +67,7 @@ function bayesian_optimize!(
         )
         invalidate!(cache)
         ynext = testfn(xnext) + get_observation_noise(surrogate) * randn()
+        println("$i. ynext: ", ynext, " -- xnext: $xnext")
         surrogate = condition!(surrogate, xnext, ynext)
         optimize!(
             surrogate,

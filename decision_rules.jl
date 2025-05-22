@@ -145,28 +145,55 @@ end
 end
 
 
-mutable struct UpperConfidenceBound <: AbstractDecisionRule
+# mutable struct UpperConfidenceBound <: AbstractDecisionRule
+#     beta::Float64
+# end
+# setparams!(ucb::UpperConfidenceBound, surrogate::AbstractSurrogate) = nothing
+# get_name(::UpperConfidenceBound) = UPPER_CONFIDENCE_BOUND_NAME
+
+# @inline function eval(
+#     s::AbstractSurrogate,
+#     ucb::UpperConfidenceBound,
+#     x::Vector{T},
+#     cache::SurrogateEvaluationCache;
+#     atol=CACHE_SAME_X_TOLERANCE) where T <: Real
+#     m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
+#     return -(m.μ + ucb.beta * m.σ)
+# end
+
+# @inline function eval_gradient(
+#     s::AbstractSurrogate,
+#     ucb::UpperConfidenceBound,
+#     x::Vector{T},
+#     cache::SurrogateEvaluationCache;
+#     atol=CACHE_SAME_X_TOLERANCE) where T <: Real
+#     m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
+#     return -(m.∇μ + ucb.beta * m.∇σ)
+# end
+
+
+mutable struct LowerConfidenceBound <: AbstractDecisionRule
     beta::Float64
 end
-setparams!(ucb::UpperConfidenceBound, surrogate::AbstractSurrogate) = nothing
-get_name(::UpperConfidenceBound) = UPPER_CONFIDENCE_BOUND_NAME
+setparams!(lcb::LowerConfidenceBound, surrogate::AbstractSurrogate) = nothing
+get_name(::LowerConfidenceBound) = LOWER_CONFIDENCE_BOUND_NAME
 
 @inline function eval(
     s::AbstractSurrogate,
-    ucb::UpperConfidenceBound,
+    lcb::LowerConfidenceBound,
     x::Vector{T},
     cache::SurrogateEvaluationCache;
     atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
-    return -(m.μ + ucb.beta * m.σ)
+    return -(m.μ - lcb.beta * m.σ)
 end
 
 @inline function eval_gradient(
     s::AbstractSurrogate,
-    ucb::UpperConfidenceBound,
+    lcb::LowerConfidenceBound,
     x::Vector{T},
     cache::SurrogateEvaluationCache;
     atol=CACHE_SAME_X_TOLERANCE) where T <: Real
     m = evaluate_moments_and_derivatives!(s, x, cache, atol=atol)
-    return -(m.∇μ + ucb.beta * m.∇σ)
+    return -(m.∇μ - lcb.beta * m.∇σ)
 end
