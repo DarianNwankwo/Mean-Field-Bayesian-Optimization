@@ -57,7 +57,6 @@ end
 include("../bayesian_optimization.jl")
 
 
-
 function main()
     cli_args = parse_command_line(ARGS)
     println("Initializing Experimental Design...")
@@ -133,10 +132,11 @@ function main()
 
     # Create trend.txt metadata and other metric files for each surrogate
     filenames = ["gaps.csv", "simple_regrets.csv", "observations.csv", "minimum_observations.csv"]
+    # Acquisition Functions / Utility Functions / Strategies
     strategies = [
         ExpectedImprovement(),
         ProbabilityOfImprovement(),
-        UpperConfidenceBound(2.),
+        LowerConfidenceBound(2.),
         RandomSampler()
     ]
     strategy_names = [get_name(strategy) for strategy in strategies]
@@ -165,7 +165,6 @@ function main()
         # Exract the current test function from the batch of test functions
         payload = testfn_payloads[testfn_name]
         testfn = payload.fn(payload.args...)
-        spatial_lbs, spatial_ubs = get_bounds(testfn)
         xnext = zeros(testfn.dim)
         
         # Generate surrogate and function trends to offset the test function with
@@ -194,6 +193,7 @@ function main()
                 try
                     tfn = function_trend_names[i] == "zero_trend" ? testfn : plus(testfn, trend)
                     tfn = normalize_testfn(tfn)
+                    spatial_lbs, spatial_ubs = get_bounds(tfn)
                     tft_name = function_trend_names[i]
 
                     minimizer_path_prefix = "$current_directory/data/$testfn_name/$tft_name/"
@@ -218,7 +218,9 @@ function main()
                                 yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
                                 
                                 # Set the correct entries in the preallocated surrogate
+                                println("Number of Active Observations Before: ", length(get_active_observations(surrogate)))
                                 set!(surrogate, Xinit, yinit)
+                                println("Number of Active Observations After: ", length(get_active_observations(surrogate)))
 
                                 # Perform Bayesian optimization loop
                                 surrogate = bayesian_optimize!(
@@ -237,7 +239,10 @@ function main()
 
                                 # Extract performance metrics
                                 observations = get_active_observations(surrogate)
+                                println("Active Observations: ", observations)
                                 get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
+                                println("minimum: ", minimum(observations))
+                                println("min_obs: ", minimum_observations)
                                 update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
                                 update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
 
@@ -246,7 +251,6 @@ function main()
                                 write_observations_to_disk(path_prefix, observations, trial)
                                 write_minimum_observations_to_disk(path_prefix, minimum_observations, trial)
                                 write_simple_regrets_to_disk(path_prefix, simple_regrets, trial)
-
                             catch e
                                 err_dir = path_prefix
                                 mkpath(err_dir)
