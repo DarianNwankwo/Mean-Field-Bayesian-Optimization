@@ -218,9 +218,7 @@ function main()
                                 yinit = tfn(Xinit) + cli_args["observation-noise"] * randn(num_initial_observations)
                                 
                                 # Set the correct entries in the preallocated surrogate
-                                println("Number of Active Observations Before: ", length(get_active_observations(surrogate)))
                                 set!(surrogate, Xinit, yinit)
-                                println("Number of Active Observations After: ", length(get_active_observations(surrogate)))
 
                                 # Perform Bayesian optimization loop
                                 surrogate = bayesian_optimize!(
@@ -239,10 +237,7 @@ function main()
 
                                 # Extract performance metrics
                                 observations = get_active_observations(surrogate)
-                                println("Active Observations: ", observations)
                                 get_minimum_observations!(minimum_observations, observations, start=num_initial_observations)
-                                println("minimum: ", minimum(observations))
-                                println("min_obs: ", minimum_observations)
                                 update_gaps!(gaps, observations, actual_minimum, start_index=num_initial_observations)
                                 update_simple_regrets!(simple_regrets, observations, actual_minimum, start_index=num_initial_observations+1)
 
