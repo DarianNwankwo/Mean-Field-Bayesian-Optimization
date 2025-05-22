@@ -405,7 +405,7 @@ function TestEasom()
     bounds[:, 1] .= -100.0
     bounds[:, 2] .= 100.0
     
-    xopt = Tuple([[π, π]])
+    xopt = Tuple([[float(π), float(π)]])
 
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
@@ -672,7 +672,7 @@ function TestLevyN13()
     bounds = zeros(2, 2)
     bounds[:,1] .= -10.0
     bounds[:,2] .= 10.0
-    xopt = Tuple([[1, 1]])
+    xopt = Tuple([[1., 1.]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
