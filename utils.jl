@@ -272,6 +272,7 @@ function get_minimum_observations!(
     iterations = length(observations) - start
 
     for i in 1:iterations
+        # TODO: This is allocating. Fix this slice.
         minimum_observations[i] = minimum(observations[1:start + i])
     end
 
