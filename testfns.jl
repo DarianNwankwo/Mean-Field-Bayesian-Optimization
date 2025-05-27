@@ -653,6 +653,7 @@ function TestLevyN13()
         G[2] = (x1 - 1)^2 * 2 * s2 * c2 * 3π +
                2 * (x2 - 1) * (1 + s3^2) +
                (x2 - 1)^2 * 2 * s3 * c3 * 2π
+        return G
     end
 
     bounds = [-10.0 10.0; -10.0 10.0]
@@ -1064,4 +1065,31 @@ function normalize_testfn(tf::TestFunction)
     xopt_unit = ((tf.xopt[1] .- lower) ./ Δ,)
 
     return TestFunction(tf.dim, bounds_unit, xopt_unit, f_unit, ∇f_unit!)
+end
+
+
+function TestForrester1D()
+    # The black‐box objective
+    f(x) = (6x[1] - 2)^2 * sin(12x[1] - 4)
+
+    # In‐place gradient ∇f!
+    function ∇f!(G, x)
+        x1 = x[1]
+        y  = 6x1 - 2            # helper
+        u  = y^2
+        v  = sin(12x1 - 4)
+        # du/dx = 12*y, dv/dx = 12*cos(12x1 - 4)
+        G[1] = 12y * v + u * 12 * cos(12x1 - 4)
+        return nothing
+    end
+
+    # Domain is [0,1]
+    bounds = zeros(1, 2)
+    bounds[:, 1] .= 0.0
+    bounds[:, 2] .= 1.0
+
+    # Approximate global minimizer
+    xopt = ([0.7572],)
+
+    return TestFunction(1, bounds, xopt, f, ∇f!)
 end
