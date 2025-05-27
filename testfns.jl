@@ -642,37 +642,21 @@ end
 
 function TestLevyN13()
     f(x) = sin(3π * x[1])^2 + (x[1] - 1)^2 * (1 + sin(3π * x[2])^2) + (x[2] - 1)^2 * (1 + sin(2π * x[2])^2)
-    
+
     function ∇f!(G, x)
-        # Extract variables
-        x1 = x[1]
-        x2 = x[2]
-        
-        # Term 1: f₁ = sin(3π*x₁)^2
-        # d/dx₁ f₁ = 6π * sin(3π*x₁) * cos(3π*x₁)
-        dT1_dx1 = 6π * sin(3π * x1) * cos(3π * x1)
-        dT1_dx2 = 0.0
-        
-        # Term 2: f₂ = (x₁ - 1)^2 * (1 + sin(3π*x₂)^2)
-        # d/dx₁ f₂ = 2*(x₁ - 1) * (1 + sin(3π*x₂)^2)
-        dT2_dx1 = 2 * (x1 - 1) * (1 + sin(3π * x2)^2)
-        # d/dx₂ f₂ = (x₁ - 1)^2 * 6π * sin(3π*x₂) * cos(3π*x₂)
-        dT2_dx2 = (x1 - 1)^2 * (6π * sin(3π * x2) * cos(3π * x2))
-        
-        # Term 3: f₃ = (x₂ - 1)^2 * (1 + sin(2π*x₂)^2)
-        # d/dx₁ f₃ = 0\n        dT3_dx1 = 0.0
-        # d/dx₂ f₃ = 2*(x₂ - 1) * (1 + sin(2π*x₂)^2) + (x₂ - 1)^2 * (4π * sin(2π*x₂) * cos(2π*x₂))
-        dT3_dx2 = 2 * (x2 - 1) * (1 + sin(2π * x2)^2) + (x2 - 1)^2 * (4π * sin(2π * x2) * cos(2π * x2))
-        
-        G[1] = dT1_dx1 + dT2_dx1 + dT3_dx1
-        G[2] = dT1_dx2 + dT2_dx2 + dT3_dx2
-        return G
+        x1, x2 = x[1], x[2]
+        s1, c1 = sin(3π * x1), cos(3π * x1)
+        s2, c2 = sin(3π * x2), cos(3π * x2)
+        s3, c3 = sin(2π * x2), cos(2π * x2)
+
+        G[1] = 2 * s1 * c1 * 3π + 2 * (x1 - 1) * (1 + s2^2)
+        G[2] = (x1 - 1)^2 * 2 * s2 * c2 * 3π +
+               2 * (x2 - 1) * (1 + s3^2) +
+               (x2 - 1)^2 * 2 * s3 * c3 * 2π
     end
-    
-    bounds = zeros(2, 2)
-    bounds[:,1] .= -10.0
-    bounds[:,2] .= 10.0
-    xopt = Tuple([[1., 1.]])
+
+    bounds = [-10.0 10.0; -10.0 10.0]
+    xopt = Tuple([[1.0, 1.0]])
     return TestFunction(2, bounds, xopt, f, ∇f!)
 end
 
