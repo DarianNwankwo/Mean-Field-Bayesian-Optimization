@@ -65,7 +65,6 @@ function get_∇linear_phi_functions(dim::Int)
 end
 
 
-# TODO: Write the gradients and hessians for zero, constant and quadratic.
 ϕ_zero(x) = 0.
 ∇ϕ_zero!(g, x) = begin
     g .= 0.
@@ -79,8 +78,10 @@ end
 end
 
 
-ϕ_quadratic(x::AbstractVector{T}) where T = dot(x, x)
-function ∇ϕ_quadratic!(g::AbstractVector{T}, x::AbstractVector{T}) where T
-    g .= 2. * x
+ϕ_quadratic(x::AbstractVector{T}) where T <: Real = dot(x, x)
+function ∇ϕ_quadratic!(g::AbstractVector{T}, x::AbstractVector{T}) where T <: Real
+    for i in 1:length(x)
+        g[i] = 2. * x[i]
+    end
     return g
 end

@@ -15,7 +15,7 @@ end
 gradient(testfn::TestFunction) = testfn.∇f
 
 # Apply the function or its gradient to each column of the matrix
-function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T
+function (testfn::TestFunction)(X::Matrix{T}; grad=false) where T <: Real
     N = size(X, 2)
     y = zeros(T, N)
 
@@ -921,7 +921,7 @@ function TestLinearCosine1D(a=1, b=1; lb=-1.0, ub=1.0)
         return G
     end
     bounds = [lb ub]
-    xopt = Tuple([zeros(1)]) # TODO
+    xopt = Tuple([zeros(1)])
     return TestFunction(1, bounds, xopt, f, ∇f!)
 end
 
@@ -1042,29 +1042,52 @@ end
 # Utility: normalize any TestFunction to the unit hypercube [0,1]^d
 function normalize_testfn(tf::TestFunction)
     lower, upper = get_bounds(tf)
-    Δ = upper .- lower
+    d = tf.dim
 
-    # Evaluate the original f at the mapped-back point
-    function f_unit(x)
-        x_orig = lower .+ Δ .* x
+    # Compute Δ = upper - lower without broadcast
+    Δ = Vector{Float64}(undef, d)
+    for i in 1:d
+        Δ[i] = upper[i] - lower[i]
+    end
+
+    # Preallocate a buffer for mapped-back points
+    x_orig = Vector{Float64}(undef, d)
+
+    # Unit-space function
+    function f_unit(x::AbstractVector{<:Real})
+        for i in 1:d
+            x_orig[i] = lower[i] + Δ[i] * x[i]
+        end
         return tf.f(x_orig)
     end
 
-    # Compute gradient w.r.t. scaled x
-    function ∇f_unit!(G, x)
-        x_orig = lower .+ Δ .* x
+    # Unit-space in-place gradient
+    function ∇f_unit!(G::AbstractVector{<:Real}, x::AbstractVector{<:Real})
+        for i in 1:d
+            x_orig[i] = lower[i] + Δ[i] * x[i]
+        end
         tf.∇f!(G, x_orig)
-        G .= G .* Δ
+        for i in 1:d
+            G[i] *= Δ[i]
+        end
         return G
     end
 
-    # New bounds are [0,1]^d
-    bounds_unit = hcat(zeros(tf.dim), ones(tf.dim))
+    # New [0,1]^d bounds without broadcast
+    bounds_unit = Matrix{Float64}(undef, d, 2)
+    for i in 1:d
+        bounds_unit[i, 1] = 0.0
+        bounds_unit[i, 2] = 1.0
+    end
 
-    # Map original xopt into unit coordinates
-    xopt_unit = ((tf.xopt[1] .- lower) ./ Δ,)
+    # Map original xopt to unit coords without broadcast
+    xopt_unit_vec = Vector{Float64}(undef, d)
+    for i in 1:d
+        xopt_unit_vec[i] = (tf.xopt[1][i] - lower[i]) / Δ[i]
+    end
+    xopt_unit = (xopt_unit_vec,)
 
-    return TestFunction(tf.dim, bounds_unit, xopt_unit, f_unit, ∇f_unit!)
+    return TestFunction(d, bounds_unit, xopt_unit, f_unit, ∇f_unit!)
 end
 
 

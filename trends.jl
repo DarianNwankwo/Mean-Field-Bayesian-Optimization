@@ -1,18 +1,35 @@
-# TODO: Add an output container for efficient evaluation of trend. Much
-# like we have in our Surrogate struct.
+# TODO: The types need to be fully exposed when specifying the type of the attributes
+# on our structs.
+# TODO: Add gradient container to functions
 
-struct PolynomialTrend
-    ϕ::PolynomialBasisFunction
-    coefficients::Vector{Float64}
-    containers::PreallocatedContainers
+# struct PolynomialTrend
+#     ϕ::PolynomialBasisFunction
+#     coefficients::Vector{Float64}
+#     containers::PreallocatedContainers
+# end
+struct PolynomialTrend{N, BF<:NTuple{N,Function}, BG<:NTuple{N,Function}, T}
+    ϕ::PolynomialBasisFunction{N,BF,BG}
+    coefficients::Vector{T}
+    containers::PreallocatedContainers{T}
 end
 
-function PolynomialTrend(ϕ::PolynomialBasisFunction, coefficients::Vector{T}, dim::Int64) where T
+# function PolynomialTrend(ϕ::PolynomialBasisFunction, coefficients::Vector{T}, dim::Int64) where T
+#     NOT_IMPORTANT = 1
+#     return PolynomialTrend(
+#         ϕ,
+#         coefficients,
+#         PreallocatedContainers{Float64}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT, NOT_IMPORTANT)
+#     )
+# end
+function PolynomialTrend(
+    ϕ::PolynomialBasisFunction{N,BF,BG}, coefficients::Vector{T}, dim::Int
+    ) where {N,BF<:NTuple{N,Function},BG<:NTuple{N,Function},T<:Real}
+    # choose container sizes as before
     NOT_IMPORTANT = 1
-    return PolynomialTrend(
+    return PolynomialTrend{N,BF,BG,T}(
         ϕ,
         coefficients,
-        PreallocatedContainers{Float64}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT, NOT_IMPORTANT)
+        PreallocatedContainers{T}(length(ϕ), dim, NOT_IMPORTANT, NOT_IMPORTANT, NOT_IMPORTANT)
     )
 end
 
@@ -25,15 +42,19 @@ function (pt::PolynomialTrend)(x::AbstractVector{T}) where T
     return dot(pt.containers.px, pt.coefficients)
 end
 
-
-function gradient(pt::PolynomialTrend, x::AbstractVector{T}) where T
+function gradient(
+    # grad::AbstractVector{T},
+    pt::PolynomialTrend{N,BF,BG,T},
+    x::AbstractVector{T}) where {N,BF<:NTuple{N,Function}, BG<:NTuple{N,Function}, T <: Real}
+# function gradient(pt::PolynomialTrend, x::AbstractVector{T}) where T
     eval_∇basis!(
         pt.ϕ,
         x,
-        (@view pt.containers.grad_px[:, :])
+        pt.containers.grad_px
     )
-    # println("pt.containers.∇px = $(pt.containers.∇px)")
-    return pt.containers.grad_px[:, :] * pt.coefficients
+    # mul!(grad, pt.containers.grad_px, pt.coefficients)
+    # return grad
+    return pt.containers.grad_px * pt.coefficients
 end
 
 # ------------------------------------------------------------------------
@@ -58,11 +79,17 @@ end
 
 # ------------------------------------------------------------------------
 # Define a barrier type that holds the composite function along with fixed function pointers.
-struct TestFunctionBarrier
+# struct TestFunctionBarrier
+#     data::CompositeFunction
+#     fptr::F where F <: Function   # Fixed pointer to composite_f
+#     ∇fptr::G where G <: Function # Fixed pointer to composite_∇f!
+# end
+struct TestFunctionBarrier{F <: Function, G <: Function}
     data::CompositeFunction
-    fptr::F where F <: Function   # Fixed pointer to composite_f
-    ∇fptr::G where G <: Function # Fixed pointer to composite_∇f!
+    fptr::F
+    ∇fptr::G
 end
+
 
 # Make the barrier callable (so it can be used in place of a plain function).
 function (tfb::TestFunctionBarrier)(x)

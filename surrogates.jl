@@ -20,12 +20,23 @@ function SurrogateEvaluationCache(d::Int)
         0
     )
 end
+
 invalidate!(cache::SurrogateEvaluationCache) = cache.valid = false
+
+@inline function is_same_x(x::AbstractVector{T}, y::AbstractVector{T}, atol::T) where T<:Real
+    for i in eachindex(x)
+        if abs(x[i] - y[i]) >= atol
+            return false
+        end
+    end
+    return true
+end
+
 function should_reuse_computation(
     cache::SurrogateEvaluationCache,
     x::AbstractVector{<:Real},
     atol=CACHE_SAME_X_TOLERANCE)
-    return cache.valid && all(abs.(x .- cache.x) .< atol)
+    return cache.valid && is_same_x(x, cache.x, atol)
 end  
 
 # Useful functions for grabbing desired attributes on our structs
@@ -50,9 +61,8 @@ get_observation_noise(s::AbstractSurrogate) = s.observation_noise
 get_dim(s::AbstractSurrogate) = size(s.X, 1)
 get_schur_buffer(s::AbstractSurrogate) = s.containers.schur
 
-
 function schur_reduced_system_solve(
-    L::AbstractMatrix{<:Real},
+    L::ElasticPDMat,
     PX::AbstractMatrix{<:Real},
     Px::AbstractMatrix{<:Real},
     KxX::AbstractVector{<:Real},
@@ -68,19 +78,21 @@ function schur_reduced_system_solve(
     tmp = get_tmp(schur)
     r = get_r(schur)
 
+    # TODO: This ldiv! here is doing L' \ L \ PX instead of L \ PX
     # term1: Y = L \ PX
+    vL = view(L.chol)
     copyto!(Y, PX)    
-    ldiv!(LowerTriangular(L), Y)
-
+    ldiv!(vL.L, Y)
 
     # term2: S = Y' * Y
     mul!(S, transpose(Y), Y)
+    # mul!(S, transpose(PX), Y)
 
     # term3: r = Y'*(L \ KxX) - Px
     copyto!(tmp, KxX)
-    ldiv!(LowerTriangular(L), tmp)
+    ldiv!(vL.L, tmp)
     mul!(r, transpose(Y), tmp)
-    r .-= Px
+    r .-= transpose(Px)
 
     # term4: Cholesky factor of S
     fS = cholesky!(Hermitian(S))
@@ -94,8 +106,8 @@ function schur_reduced_system_solve(
     w0 = get_w0(schur)
     copyto!(w0, KxX)
     mul!(w0, PX, w1, -1.0, 1.0)     # w0 = KxX - PX*w1
-    ldiv!(LowerTriangular(L), w0)
-    ldiv!(UpperTriangular(L'), w0)
+    ldiv!(vL.L, w0)
+    ldiv!(vL.L', w0)
 
     # term7: return concatenated solution
     w = get_w(schur)
@@ -104,6 +116,61 @@ function schur_reduced_system_solve(
     schur.valid = true
     return w
 end
+
+# function schur_reduced_system_solve(
+#     L::AbstractMatrix{<:Real},
+#     PX::AbstractMatrix{<:Real},
+#     Px::AbstractMatrix{<:Real},
+#     KxX::AbstractVector{<:Real},
+#     schur::SchurBuffer,
+#     x::AbstractVector{<:Real})
+#     if schur.valid && isequal(x, schur.x)
+#         return schur.w
+#     end
+#     # Preallocate scratch buffers
+#     n, m = size(PX)
+#     Y = get_Y(schur)
+#     S = get_S(schur)
+#     tmp = get_tmp(schur)
+#     r = get_r(schur)
+
+#     # TODO: This ldiv! here is doing L' \ L \ PX instead of L \ PX
+#     # term1: Y = L \ PX
+#     copyto!(Y, PX)    
+#     ldiv!(LowerTriangular(L), Y)
+
+#     # term2: S = Y' * Y
+#     mul!(S, transpose(Y), Y)
+#     # mul!(S, transpose(PX), Y)
+
+#     # term3: r = Y'*(L \ KxX) - Px
+#     copyto!(tmp, KxX)
+#     ldiv!(LowerTriangular(L), tmp)
+#     mul!(r, transpose(Y), tmp)
+#     r .-= transpose(Px)
+
+#     # term4: Cholesky factor of S
+#     fS = cholesky!(Hermitian(S))
+
+#     # term5: w1 = fS \ r  (in-place solve)
+#     w1 = get_w1(schur)
+#     copyto!(w1, r)
+#     ldiv!(fS, w1)
+
+#     # term6: w0 = L'\(L\(KxX - PX*w1))
+#     w0 = get_w0(schur)
+#     copyto!(w0, KxX)
+#     mul!(w0, PX, w1, -1.0, 1.0)     # w0 = KxX - PX*w1
+#     ldiv!(LowerTriangular(L), w0)
+#     ldiv!(UpperTriangular(L'), w0)
+
+#     # term7: return concatenated solution
+#     w = get_w(schur)
+#     w[1:length(w1)] .= w1
+#     w[length(w1)+1:length(w1) + schur.active_index] .= w0
+#     schur.valid = true
+#     return w
+# end
 
 """
 The model we consider consists of some parametric and nonparametric component, i.e.
@@ -486,7 +553,7 @@ function set_kernel!(s::HybridSurrogate, kernel::RadialBasisFunction)
         observation_noise = get_observation_noise(s)
         # s.K[1:N, 1:N] = eval_KXX(kernel, get_active_covariates(s)) + (JITTER + σn2) * I
         # Grab the buffer and update inplace
-        Kbuffer = s.L.mat
+        Kbuffer = view(s.L.mat)
         eval_KXX!(
             kernel,
             get_active_covariates(s),
@@ -844,7 +911,8 @@ function predictive_std(
     )
     P = get_active_parametric_basis_matrix(s)   
     w = schur_reduced_system_solve(
-        get_active_cholesky(s),
+        # get_active_cholesky(s),
+        s.L,
         P,
         px,
         kx,
@@ -853,11 +921,10 @@ function predictive_std(
     )
     w0 = get_w0(get_schur_buffer(s))
     w1 = get_w1(get_schur_buffer(s))
-    # TODO: Can do inplace operations here with mul!
     dot_px = dot(px, w1)
     dot_kx = dot(kx, w0)
     k0 = get_kernel(s)(0.)
-    # return sqrt(k0 - dot(v, w))
+    # println("k0: $k0\ndot_px: $dot_px\ndot_kx: $dot_kx")
     cache.σ = sqrt(k0 - (dot_px + dot_kx))
     return cache.σ
 end
@@ -875,7 +942,8 @@ function predictive_std_gradient!(
     px = eval_basis!(get_parametric_basis_function(s), x, get_px(s))
     ∇px = eval_∇basis!(get_parametric_basis_function(s), x, get_grad_px(s))
     ∇kx = eval_∇KxX!(get_kernel(s), x, get_active_covariates(s), get_active_grad_KxX(s), get_diff_x(s))
-    w = schur_reduced_system_solve(get_active_cholesky(s), P, px, kx, get_schur_buffer(s), x)
+    # w = schur_reduced_system_solve(get_active_cholesky(s), P, px, kx, get_schur_buffer(s), x)
+    w = schur_reduced_system_solve(s.L, P, px, kx, get_schur_buffer(s), x)
     dim = length(cache.∇σ)
     w0 = get_w0(get_schur_buffer(s))
     w1 = get_w1(get_schur_buffer(s))
@@ -976,7 +1044,7 @@ end
 # ------------------------------------------------------------------
 # Operations for computing optimal hyperparameters.
 # ------------------------------------------------------------------
-function logabsdet_M2(s::HybridSurrogate)
+function logabsdet_M(s::HybridSurrogate)
     # Get active pieces
     L = get_active_cholesky(s)         # LowerTriangular from cholesky(K)
     K = get_active_covariance(s)       # n × n
@@ -1060,7 +1128,8 @@ function optimize!(
     ftol_rel!(opt, F_RELTOL)
     maxeval!(opt, 100)             # maximum number of evaluations/iterations
     # Optionally, set a time limit if NEWTON_SOLVE_TIME_LIMIT is defined:
-    maxtime!(opt, NEWTON_SOLVE_TIME_LIMIT)
+    # maxtime!(opt, NEWTON_SOLVE_TIME_LIMIT)
+    maxtime!(opt, 10)
 
     function nlopt_obj(θ, grad)
         # if length(grad) > 0

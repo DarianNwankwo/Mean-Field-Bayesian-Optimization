@@ -3,36 +3,36 @@
 # Experimental configuration
 RANDOM_SEED=1906
 RANDOM_RESTARTS=256
-NUMBER_OF_TRIALS=50
-BAYESIAN_OPTIMIZATION_LOOP_BUDGET=100
+NUMBER_OF_TRIALS=5
+BAYESIAN_OPTIMIZATION_LOOP_BUDGET=10
 SHOULD_OPTIMIZE=1
 
 # Array of test function names
 function_names=(
-  "gramacylee"
-  "rastrigin4d"
+  # "gramacylee"
+  # "rastrigin4d"
   "ackley2d"
-  "ackley8d"
-  "rosenbrock"
-  "sixhump"
-  "braninhoo"
-  "goldsteinprice"
-  "styblinskitang10d"
-  "schwefel4d"
-  "trid4d"
-  "mccormick"
-  "hartmann6d"
-  "griewank3d"
-  "shekel4d"
-  "beale"
-  "easom"
-  "bukinn6"
-  "crossintray"
-  "eggholder"
-  "holdertable"
-  "levyn13"
-  "bohachevsky"
-  "dropwave"
+  # "ackley8d"
+  # "rosenbrock"
+  # "sixhump"
+  # "braninhoo"
+  # "goldsteinprice"
+  # "styblinskitang10d"
+  # "schwefel4d"
+  # "trid4d"
+  # "mccormick"
+  # "hartmann6d"
+  # "griewank3d"
+  # "shekel4d"
+  # "beale"
+  # "easom"
+  # "bukinn6"
+  # "crossintray"
+  # "eggholder"
+  # "holdertable"
+  # "levyn13"
+  # "bohachevsky"
+  # "dropwave"
 )
 
 > timing.txt
@@ -43,7 +43,7 @@ for fn in "${function_names[@]}"; do
     echo "Running $fn..."
     start=$(date +%s.%N)
     if [ $SHOULD_OPTIMIZE -eq 1 ]; then
-      julia --check-bounds=yes ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
+      julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \
         --starts $RANDOM_RESTARTS --trials $NUMBER_OF_TRIALS --budget $BAYESIAN_OPTIMIZATION_LOOP_BUDGET --optimize
     else
       julia ../bayesopt_batch.jl --function-names "$fn" --seed $RANDOM_SEED \

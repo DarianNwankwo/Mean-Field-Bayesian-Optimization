@@ -1,3 +1,4 @@
+# TODO: Include noise variance term in kernel hyperparameters
 get_hyperparameters(sk::AbstractKernel) = sk.θ
 Base.length(k::StationaryKernel) = length(get_hyperparameters(k))
 
@@ -37,68 +38,52 @@ function set_hyperparameters!(rbf::RadialBasisFunction, θ::Vector{T}) where T <
 end
 
 
-"""
-    Matern52_ψ(ρ, θ)
-
-Evaluate the Matern 5/2 kernel at distance ρ with hyperparameters θ.
-Assumes that θ is a vector with the length-scale l at θ[1].
-"""
 function Matern52_ψ(ρ::Real, θ::AbstractVector{<:Real})
     l = θ[1]
+    v = θ[2]
     c = sqrt(5.0) / l
     s = c * ρ
-    return (1 + s + s^2/3) * exp(-s)
+    return v * (1 + s + s^2/3) * exp(-s)
 end
 
-"""
-    Matern52_Dρψ(ρ, θ)
-
-Evaluate the first derivative of the Matern 5/2 kernel with respect to ρ.
-"""
 function Matern52_Dρψ(ρ::Real, θ::AbstractVector{<:Real})
     l = θ[1]
+    v = θ[2]
     c = sqrt(5.0) / l
     s = c * ρ
-    # Derivative with respect to ρ: dψ/dρ = - (c * s * (1+s)/3)*exp(-s)
-    return -(c * s * (1 + s)/3) * exp(-s)
+    # Derivative with respect to ρ: dψ/dρ = - v * (c * s * (1+s)/3)*exp(-s)
+    return -v * (c * s * (1 + s)/3) * exp(-s)
 end
 
-"""
-    Matern52_Dρρψ(ρ, θ)
-
-Evaluate the second derivative of the Matern 5/2 kernel with respect to ρ.
-"""
 function Matern52_Dρρψ(ρ::Real, θ::AbstractVector{<:Real})
     l = θ[1]
+    v = θ[2]
     c = sqrt(5.0) / l
     s = c * ρ
-    # Second derivative: d²ψ/dρ² = -(c^2)*exp(-s)*(1+s-s^2)/3
-    return -(c^2) * exp(-s) * (1 + s - s^2)/3
+    # Second derivative: d²ψ/dρ² = - v * (c^2)*exp(-s)*(1+s-s^2)/3
+    return - v * (c^2) * exp(-s) * (1 + s - s^2)/3
 end
 
-"""
-    Matern52_∇θψ(ρ, θ)
-
-Evaluate the gradient of the Matern 5/2 kernel with respect to its hyperparameters.
-Since only one hyperparameter (the length-scale) is present, this returns a one-element vector.
-"""
+# TODO: Update gradient of this wrt lengthscale and noise variance
 function Matern52_∇θψ(G::AbstractVector{<:Real}, ρ::Real, θ::AbstractVector{<:Real})
     l = θ[1]
+    v = θ[2]
     c = sqrt(5.0) / l
     s = c * ρ
     # Compute ∂ψ/∂l as (s + s^2)*exp(-s)*(sqrt(5)*ρ)/(3*l^2)
-    G .= (s + s^2) * exp(-s) * (sqrt(5.0) * ρ) / (3 * l^2)
+    G[1] = v * (s + s^2) * exp(-s) * (sqrt(5.0) * ρ) / (3 * l^2)
+    G[2] = 2. * v * (1 + s + s^2/3) * exp(-s)
     return G
 end
 
 """
-    Matern52(θ=[1.])
+    Matern52(θ=[1., 1.])
 
 Construct a RadialBasisFunction representing the Matern 5/2 kernel using
 the analytic functions defined in `Matern52_ψ`, `Matern52_Dρψ`,
 `Matern52_Dρρψ`, and `Matern52_∇θψ`. The default hyperparameter vector is [1.].
 """
-function Matern52(θ::AbstractVector{T} = [1.]) where T <: Real
+function Matern52(θ::AbstractVector{T} = [1., 1.]) where T <: Real
     n = length(θ)
     static_θ = MVector{n}(θ)
     return RadialBasisFunction{n,
@@ -142,8 +127,9 @@ end
 function eval_KXX!(
     rbf::RadialBasisFunction,
     X::AbstractMatrix{T1},
-    KXX::AbstractMatrix{T2},
-    diff::AbstractVector{T3}) where {T1 <: Real, T2 <: Real, T3 <: Real}
+    # KXX::AbstractMatrix{T2},
+    KXX::SubArray{T2, N2, A, I, L},
+    diff::AbstractVector{T3}) where {T1 <: Real, T2 <: Real, T3 <: Real, N2, A, I, L}
     d, N = size(X)
     ψ0 = rbf(0.0)
 

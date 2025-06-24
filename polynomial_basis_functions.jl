@@ -74,7 +74,7 @@ function eval_basis!(pbf::PolynomialBasisFunction, X::AbstractMatrix{T}, out::Ab
     return out
 end
 
-function eval_∇basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::AbstractMatrix) where T
+function eval_∇basis!(pbf::PolynomialBasisFunction, x::AbstractVector{T}, out::AbstractMatrix{T}) where T <: Real
     # basis_evaluation = zeros(length(x), length(basis_functions))
 
     # TODO: Replace with non-allocating inplace operations for assigning

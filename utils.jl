@@ -133,6 +133,8 @@ function box_muller_transform(S)
 end
 
 function get_trends(bias, dim)
+    # TODO: Remove the case where the polynomial is the zero function since this
+    # just becomes our standard zero mean GP
     surrogate_trends = [
         PolynomialBasisFunction(
             Tuple([ϕ_zero]),
@@ -155,7 +157,7 @@ function get_trends(bias, dim)
 
     coefficients = [ones(length(pbf)) for pbf in surrogate_trends]
 
-    initial_observation_sizes = [1, 1, dim, dim + 1]
+    initial_observation_sizes = [1 + dim, 1 + dim, dim + dim, dim + 2]
     function_trends = [PolynomialTrend(surrogate_trends[i], coefficients[i], dim) for i in 1:length(coefficients)]
 
     function_trends = []
@@ -218,10 +220,10 @@ function gap(f_init::T, f_best::T, f_star::T; gap_tol::T = F_RELTOL) where T <: 
         return T(1.0)  # No room for meaningful improvement
     end
 
-    # Case 2: Found better than expected (possibly due to error in f*)
-    if f_best < f_star
-        return T(1.0)
-    end
+    # # Case 2: Found better than expected (possibly due to error in f*)
+    # if f_best < f_star
+    #     return T(1.0)
+    # end
 
     return actual_improvement / total_possible_improvement
 end

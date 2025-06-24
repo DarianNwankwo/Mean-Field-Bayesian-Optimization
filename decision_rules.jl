@@ -1,12 +1,10 @@
-
-
 function evaluate_moments_and_derivatives!(
     s::AbstractSurrogate,
     x::Vector{T},
     cache::SurrogateEvaluationCache;
     atol=CACHE_SAME_X_TOLERANCE
 ) where T
-    if cache.valid && all(abs.(x .- cache.x) .< atol)
+    if cache.valid && is_same_x(x, cache.x, atol)
         return (; μ=cache.μ, σ=cache.σ, ∇μ=cache.∇μ, ∇σ=cache.∇σ)
     end
     # If not, compute and update the cache.
